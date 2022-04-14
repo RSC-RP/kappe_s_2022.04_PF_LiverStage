@@ -1,0 +1,214 @@
+---
+title: "PF Liver Stage Sample Manifest"
+author: "Jenny L Smith"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Set-up 
+
+```{r set-up}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),
+                      tidy=TRUE,
+                      fig.align='center',
+                      fig.width = 10, fig.height = 10)
+
+options(stringsAsFactors = FALSE, max.print = 100)
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+```
+
+```{r message = FALSE, warning=FALSE}
+library(groundhog)
+pkgs <- c("stringr","magrittr","ggplot2", "gridExtra","dplyr","tidyr","tibble")
+groundhog.library(pkgs, "2022-04-14")
+getwd()
+```
+
+# Define Functions 
+
+```{r}
+#Function to create the config.yml file for the rnaseq_count snakemake workflow
+create_config_yml <- function(fastq_manifest, sample_id_col,
+                              genome_dir="resources/genome", 
+                              fasta_file="resources/genome/genome.fa", 
+                              gtf_file="resources/genome/genes.gtf",
+                              outfile="config.yml"){
+  
+  sample_ids <- pull(fastq_manifest,sample_id_col)
+  n_samples <- length(sample_ids)
+  spaces <- rep(paste(c(rep(" ",4),"-"), collapse = ""), n_samples)
+  
+  genome_annots <- glue::glue('genomeDir: \"{genomeDir}\"\n',
+             'fasta: \"{fasta}\"\n',
+             'gtf: \"{gtf}\"\n',
+             '\n',
+             'samples:\n',
+             sep="",
+             genomeDir=genome_dir,
+             fasta=fasta_file,
+             gtf=gtf_file) 
+  
+  samples_to_process <- glue::glue('{spaces} {samples}',
+             sep="",
+             samples=sample_ids,
+             spaces=spaces) 
+  
+  cat(genome_annots, samples_to_process, file=outfile, sep="\n")
+}
+```
+
+# Project Files 
+
+Main directory:
+/active/kappe_s/kappe/Gigliola/BobM_DuffyNGS_PF_LiverStage
+
+Samples:
+/active/kappe_s/kappe/Gigliola/BobM_DuffyNGS_PF_LiverStage/Annotation.txt
+
+Counts from Bob Morrison:
+/active/kappe_s/kappe/Gigliola/BobM_DuffyNGS_PF_LiverStage/All.Hs.GeneData.READS.txt
+
+Raw Reads: - ask about broken links
+/active/kappe_s/kappe/Gigliola/BobM_DuffyNGS_PF_LiverStage/FASTQ
+
+Genome Refs:
+Hs_grc.gff -> /active/kappe_s/kappe/BobMorrison/Hs_grc.gff
+Mmu_grc.gff -> /active/kappe_s/kappe/BobMorrison/Mmu_grc.gff
+Pf3D7.gff -> /active/kappe_s/kappe/BobMorrison/Pf3D7.gff
+PfHsMmu_genomicDNA.fasta -> /active/kappe_s/kappe/NGS/Bowtie2Indexes/FastaFiles/PfHsMmu_genomicDNA.fasta
+
+STAR aligner:
+https://childrens-atlassian/bitbucket/projects/RP/repos/rnaseq_count
+
+
+# Sample Info
+
+```{r}
+samples <- openxlsx::read.xlsx("samples/Legend Libraries .xlsx")
+
+head(samples)
+dim(samples) #37  5
+# View(samples)
+```
+
+```{r}
+#This is a file likely from Bob Morrison when he was running the analysis. 
+samples_files_orig <- read.delim("samples/Annotation.txt")
+head(samples_files_orig)
+# dim(samples_files_orig) #48 13
+# View(samples_files_orig)
+```
+
+# Fastq Files 
+
+First, the fastq files must be re-organized and then map filenames to the sample sheets.  
+
+  #   grepl("210408",symlinks) ~ paste0("/active/kappe_s/kappe/Gigliola/NextSeq_Runs/210408_NS500259_0368_AH33V3BGXH/demultiplexed-Data",filename),
+  #   grepl("201014", symlinks) ~ paste0("/active/kappe_s/kappe/Gigliola/NextSeq_Runs/201014_NB501859_0214_AHY3V5BGXC/Data/Intensities/BaseCalls", filename)
+  
+```{r}
+# Create a fastq file manifest with the sample IDs and the full filepaths of the data. 
+# NOTE: some symlinks were broken in the`original_data_path` and thus they needed to have their file paths fixed to direct to the hard copy of the fastq.
+
+original_data_path <- "/active/kappe_s/kappe/Gigliola/BobM_DuffyNGS_PF_LiverStage/FASTQ"
+
+fqs <- tibble(fastq_paths=dir(original_data_path, full.names = TRUE, pattern = "*.gz")) %>% 
+  mutate(filename=str_split_fixed(fastq_paths, pattern="/", n=10)[,8], 
+         symlinks=Sys.readlink(fastq_paths)) %>% 
+  mutate(fixed_fastq_paths=case_when(
+    symlinks=="" ~ fastq_paths, 
+    grepl("210408",symlinks) ~ paste("/active/kappe_s/kappe/Gigliola/NextSeq_Runs/210408_NS500259_0368_AH33V3BGXH/demultiplexed-Data", filename, sep="/"),
+    grepl("201014", symlinks) ~ paste("/active/kappe_s/kappe/Gigliola/NextSeq_Runs/201014_NB501859_0214_AHY3V5BGXC/Data/Intensities/BaseCalls", filename, sep="/")
+  )) %>% 
+  mutate(check_file_exists=file.exists(fixed_fastq_paths)) %>%
+  mutate(sample_id=gsub("_R[12](_)?.{0,3}\\.fastq.gz", "", filename), 
+         analysis_filename=case_when(
+           grepl("_R1_?", filename) ~ paste0(sample_id, "_1.fq.gz"), 
+           TRUE ~ paste0(sample_id, "_2.fq.gz")
+         )) %>% 
+  select(sample_id,analysis_filename, filename, fixed_fastq_paths,check_file_exists, broken_fastq_paths=fastq_paths) 
+
+
+# dim(fqs)
+# table(duplicated(fqs$sample_id)) #OK
+# table(fqs$check) #OK
+# any(duplicated(fqs$analysis_filename)) #OK
+```
+
+```{r eval=FALSE}
+#Only run this once to organize data for the rnaseq_counts workflow
+data_path <- "resources/fastq"
+
+mksymlinks <- lapply(unique(fqs$sample_id),function(Sample_id){
+  
+  subset <- fqs %>% 
+    filter(sample_id==Sample_id)
+  analysis_dir <- file.path(data_path,Sample_id)
+  dir.create(analysis_dir, recursive = TRUE)
+
+  for(i in 1:2){
+    target <- file.path(analysis_dir, subset[i,"analysis_filename"])
+    command <- paste("ln -svf",subset[i,"fixed_fastq_paths"], target)
+    system(command)
+  }
+})
+```
+
+
+```{r}
+data_path <- "resources/fastq"
+
+fqs_clean <- fqs %>% 
+  mutate(symlink_fastq_paths=dir(data_path, recursive = T, full.names = TRUE)) %>% 
+  select(sample_id, analysis_filename, filename,symlink_fastq_paths, everything())
+
+fqs_clean
+# write.csv(fqs_clean,"samples/Kappe_s_2022.04_PF_LiverStage_fastq_manifest.csv")
+```
+
+
+# Create Sample Manifest
+
+```{r}
+head(samples_files_orig)
+```
+```{r}
+to_merge <- samples_files_orig %>%
+  select(SampleID, Filename,Group, GroupSort)
+```
+
+```{r}
+sample_manifest <- fqs_clean %>% 
+  filter(grepl("TR2_L1Pf2_S1|TR2_L2Pf2_S7", filename))
+
+sample_manifest
+```
+
+
+# Run RNAseq_count workflow on Fastqs
+
+See the code on bitbucket for more information 
+https://childrens-atlassian/bitbucket/users/jsmi26/repos/rnaseq_count/browse
+
+```{r}
+#for testing the initial pipeline 
+create_config_yml(fastq_manifest = fqs_clean[1,], sample_id_col = "sample_id", outfile = "config_test.yml")
+```
+
+```{r}
+#Create the config.yml for the full sample cohort. 
+create_config_yml(fastq_manifest = fqs_clean, sample_id_col = "sample_id")
+```
+
+
+
+
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
+
+
+
