@@ -8,6 +8,7 @@ output: html_document
 # Set-up 
 
 ```{r set-up}
+knitr::opts_knit$set(root.dir = PROJHOME)
 knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),
                       tidy=TRUE,
                       fig.align='center',
@@ -18,9 +19,16 @@ table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
 ```
 
 ```{r message = FALSE, warning=FALSE}
-library(groundhog)
-pkgs <- c("stringr","magrittr","ggplot2", "gridExtra","dplyr","tidyr","tibble")
-groundhog.library(pkgs, "2022-04-14")
+host <- Sys.info()[["nodename"]]
+if(host=="MLVKQ0PF47H0"){
+  ground_hog_dir <- file.path("~/OneDrive - SCH","R_groundhog")
+}else{
+  ground_hog_dir <- file.path(PROJDIR,"R_groundhog")
+}
+groundhog::set.groundhog.folder(ground_hog_dir)
+pkgs <- c("stringr","magrittr","ggplot2", "gridExtra","dplyr","tidyr","tibble","lintr")
+groundhog::groundhog.library(pkgs, "2022-04-14")
+
 getwd()
 ```
 
@@ -101,10 +109,7 @@ head(samples_files_orig)
 
 # Fastq Files 
 
-First, the fastq files must be re-organized and then map filenames to the sample sheets.  
-
-  #   grepl("210408",symlinks) ~ paste0("/active/kappe_s/kappe/Gigliola/NextSeq_Runs/210408_NS500259_0368_AH33V3BGXH/demultiplexed-Data",filename),
-  #   grepl("201014", symlinks) ~ paste0("/active/kappe_s/kappe/Gigliola/NextSeq_Runs/201014_NB501859_0214_AHY3V5BGXC/Data/Intensities/BaseCalls", filename)
+First, the fastq files must be re-organized to work with the pipeline. 
   
 ```{r}
 # Create a fastq file manifest with the sample IDs and the full filepaths of the data. 
@@ -135,31 +140,11 @@ fqs <- tibble(fastq_paths=dir(original_data_path, full.names = TRUE, pattern = "
 # any(duplicated(fqs$analysis_filename)) #OK
 ```
 
-```{r eval=FALSE}
-#Only run this once to organize data for the rnaseq_counts workflow
-data_path <- "resources/fastq"
-
-mksymlinks <- lapply(unique(fqs$sample_id),function(Sample_id){
-  
-  subset <- fqs %>% 
-    filter(sample_id==Sample_id)
-  analysis_dir <- file.path(data_path,Sample_id)
-  dir.create(analysis_dir, recursive = TRUE)
-
-  for(i in 1:2){
-    target <- file.path(analysis_dir, subset[i,"analysis_filename"])
-    command <- paste("ln -svf",subset[i,"fixed_fastq_paths"], target)
-    system(command)
-  }
-})
-```
-
-
 ```{r}
 data_path <- "resources/fastq"
 
 fqs_clean <- fqs %>% 
-  mutate(symlink_fastq_paths=dir(data_path, recursive = T, full.names = TRUE)) %>% 
+  mutate(symlink_fastq_paths=paste("resources/fastq",sample_id,analysis_filename, sep="/")) %>% 
   select(sample_id, analysis_filename, filename,symlink_fastq_paths, everything())
 
 fqs_clean
@@ -172,6 +157,7 @@ fqs_clean
 ```{r}
 head(samples_files_orig)
 ```
+
 ```{r}
 to_merge <- samples_files_orig %>%
   select(SampleID, Filename,Group, GroupSort)
