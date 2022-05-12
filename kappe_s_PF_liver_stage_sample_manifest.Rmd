@@ -19,15 +19,14 @@ table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
 ```
 
 ```{r message = FALSE, warning=FALSE}
-host <- Sys.info()[["nodename"]]
-if(host=="MLVKQ0PF47H0"){
-  ground_hog_dir <- file.path("~/OneDrive - SCH","R_groundhog")
-}else{
-  ground_hog_dir <- file.path(PROJDIR,"R_groundhog")
-}
-groundhog::set.groundhog.folder(ground_hog_dir)
-pkgs <- c("stringr","magrittr","ggplot2", "gridExtra","dplyr","tidyr","tibble","lintr")
-groundhog::groundhog.library(pkgs, "2022-04-14")
+# pkgs <- c("stringr","magrittr","dplyr","tidyr","tibble")
+# groundhog::groundhog.library(pkgs, "2022-04-18") #NOT WORKING
+
+library(tidyr)
+library(tibble)
+library(dplyr)
+library(stringr)
+library(ggplot2)
 
 getwd()
 ```
@@ -76,7 +75,7 @@ Samples:
 Counts from Bob Morrison:
 /active/kappe_s/kappe/Gigliola/BobM_DuffyNGS_PF_LiverStage/All.Hs.GeneData.READS.txt
 
-Raw Reads: - ask about broken links
+Raw Reads: 
 /active/kappe_s/kappe/Gigliola/BobM_DuffyNGS_PF_LiverStage/FASTQ
 
 Genome Refs:
@@ -87,6 +86,7 @@ PfHsMmu_genomicDNA.fasta -> /active/kappe_s/kappe/NGS/Bowtie2Indexes/FastaFiles/
 
 STAR aligner:
 https://childrens-atlassian/bitbucket/projects/RP/repos/rnaseq_count
+https://childrens-atlassian/bitbucket/projects/RPDEV/repos/rnaseq_count_nf
 
 
 # Sample Info
@@ -147,8 +147,7 @@ fqs_clean <- fqs %>%
   mutate(symlink_fastq_paths=paste("resources/fastq",sample_id,analysis_filename, sep="/")) %>% 
   select(sample_id, analysis_filename, filename,symlink_fastq_paths, everything())
 
-fqs_clean
-# write.csv(fqs_clean,"samples/Kappe_s_2022.04_PF_LiverStage_fastq_manifest.csv")
+# fqs_clean
 ```
 
 
@@ -156,22 +155,130 @@ fqs_clean
 
 ```{r}
 head(samples_files_orig)
+table(samples_files_orig$Exclude)
+table(samples_files_orig$PairedEnd)
+table(samples_files_orig$StrandSpecific)
+# samples_files_orig %>% 
+#   filter(Exclude)
+
+# samples_files_orig %>% 
+#   filter(!PairedEnd)
 ```
 
 ```{r}
 to_merge <- samples_files_orig %>%
-  select(SampleID, Filename,Group, GroupSort)
+  select(BobM_SampleID=SampleID, BobM_Files=Filename,Group, GroupSort) %>% 
+  filter(!grepl("^Meta", BobM_SampleID)) %>% 
+  separate(BobM_Files, into=paste("read",1:4, sep="_"), sep=",",
+           remove=FALSE, extra="warn", fill="right") %>% 
+  pivot_longer(matches("read_"),
+               names_to="reads",
+               values_to="filename") %>% 
+  filter(!is.na(filename)) %>%
+  select(-reads)
+
+# head(to_merge)
+dim(to_merge)
+# table(duplicated(to_merge$files))
 ```
 
 ```{r}
-sample_manifest <- fqs_clean %>% 
-  filter(grepl("TR2_L1Pf2_S1|TR2_L2Pf2_S7", filename))
+fastq_manifest <- to_merge %>% 
+  left_join(fqs_clean, by=c("filename")) %>% 
+  select(sample_id,symlink_fastq_paths, Group, GroupSort, everything())  
 
-sample_manifest
+head(fastq_manifest)
+dim(fastq_manifest) #92 11
+# write.csv(fastq_manifest, "samples/Kappe_s_2022.04_PF_LiverStage_fastq_manifest.csv")
+```
+
+```{r}
+sample_manifest <- fastq_manifest %>% 
+  select(-fixed_fastq_paths, -broken_fastq_paths) %>% 
+  mutate(Read = ifelse(grepl("_[Rr]?1.(fastq|fq).gz", symlink_fastq_paths), "read1_fastq", "read2_fastq")) %>% 
+  pivot_wider(id_cols=c(sample_id,Group,GroupSort, BobM_SampleID,BobM_Files),
+              names_from = Read,
+              values_from = symlink_fastq_paths) %>% 
+  arrange(Group, GroupSort) %>%
+  mutate(across(matches("read"), ~basename(.x))) %>% 
+  filter(!grepl("Mix", sample_id)) %>% 
+  
+  group_by(GroupSort) %>%
+  mutate(analysis_group_description=case_when(
+    grepl("Naive|Mock", GroupSort) ~ "control",
+    grepl("^TR", sample_id) & grepl("^GFP$", GroupSort) ~ paste("TechnicalRep",Group, "Hepatocytes_PfInfected", sep="_"),
+    grepl("^GFP$", GroupSort) ~ paste(Group, "Hepatocytes_PfInfected", sep="_"),
+    grepl("^TR", sample_id) & grepl("NoGFP", GroupSort) ~ paste("TechnicalRep",Group, "Hepatocytes_PfUninfected", sep="_"),
+    grepl("NoGFP", GroupSort) ~ paste(Group, "Hepatocytes_pFUninfected",sep="_"),
+    grepl("SPZ", Group) ~ "sporozorite"
+  )) %>%
+  ungroup() %>%
+  group_by(analysis_group_description) %>% 
+  mutate(analysis_group=gsub("ay", "", analysis_group_description)) %>% 
+  ungroup() %>% 
+  select(sample_id,analysis_group,
+         analysis_group_description, 
+         Group:GroupSort, matches("read"), everything())
+
+head(sample_manifest)
+table(sample_manifest$analysis_group_description)
+# write.csv(sample_manifest, "samples/Kappe_s_2022.04_PF_LiverStage_sample_manifest.csv", row.names=FALSE)
 ```
 
 
+
 # Run RNAseq_count workflow on Fastqs
+
+## Nextflow Pipeline
+
+See:
+https://childrens-atlassian/bitbucket/projects/RPDEV/repos/rnaseq_count_nf
+
+https://physiology.med.cornell.edu/faculty/skrabanek/lab/angsd/lecture_notes/STARmanual.pdf
+
+The combined fasta file for the genomes has already been created by Bob Morrison previously. These gff files were also modified by Bob Morrison to have unique chr identifiers - and it appears they were collapsed down to 1 entry per gene (no transcript information available in the files.)
+
+The nextflow workflow required a sample sheet and the gff file for gene quantification. 
+
+```{bash}
+#Create the combined 
+cd species_genomes
+echo "##gff-version 3" > PfHsMmu_grc_header
+for file in $(ls -1 *grc.gff)
+do
+  grep -E "^##sequence-region" $file >> PfHsMmu_grc_header
+  grep -E -v "^#" $file >> PfHsMmu_grc_body
+done
+
+cat PfHsMmu_grc_header PfHsMmu_grc_body >  PfHsMmu_grc.gff
+rm PfHsMmu_grc_body PfHsMmu_grc_header
+```
+
+```{bash}
+#spot check chromosomes in the GFF and fasta file - OK
+for chr in $(grep -E "^#" PfHsMmu_grc.gff | cut -f 2 -d$'\t')
+do
+  grep -E $chr PfHsMmu_genomicDNA.fasta
+done
+```
+
+```{r}
+sample_sheet <- sample_manifest %>% 
+  mutate(single_end = "false") %>% 
+  select(id=sample_id,single_end,r1=read1,r2=read2) 
+
+head(sample_sheet)
+dim(sample_sheet)
+# any(duplicated(sample_sheet$id)) #OK
+
+# write.table(sample_sheet, file = "samples/kappe_s_PfHsMmu_sample_sheet.txt", sep="\t", row.names = FALSE, quote = FALSE)
+# write.table(sample_sheet, 
+#             file = file.path(ACTIVE,"taylor_s/people/jsmi26/RPDEV/rnaseq_count_nf/sample_sheets/kappe_s_PfHsMmu_sample_sheet.txt"),
+#             sep="\t", row.names = FALSE, quote = FALSE)
+```
+
+
+## SNAKEMAKE
 
 See the code on bitbucket for more information 
 https://childrens-atlassian/bitbucket/users/jsmi26/repos/rnaseq_count/browse
@@ -185,6 +292,220 @@ create_config_yml(fastq_manifest = fqs_clean[1,], sample_id_col = "sample_id", o
 #Create the config.yml for the full sample cohort. 
 create_config_yml(fastq_manifest = fqs_clean, sample_id_col = "sample_id")
 ```
+
+# RNA-seq Count Matrix 
+
+
+
+## Concatenation 
+
+```{r}
+counts_files_dir <- file.path(ACTIVE,"taylor_s/people/jsmi26/RPDEV/rnaseq_count_nf/results/star") 
+```
+
+```{r}
+counts_files <- dir(counts_files_dir, 
+                    pattern = "*.ReadsPerGene.out.tab", 
+                    full.names = TRUE)
+
+head(counts_files)
+length(counts_files)
+```
+
+```{r}
+ counts_matrix_stats <- purrr::map(counts_files, function(x){
+   sample <- basename(x) %>% 
+     gsub(".ReadsPerGene.out.tab","", .)
+   
+   readr::read_delim(file=x, delim="\t", col_names=FALSE, show_col_types = FALSE) %>% 
+      select(1:2) %>% 
+      rename_all(~c("gene_name", paste0(sample,"_unstranded_count")))
+ }) %>% 
+  purrr::reduce(left_join, by = "gene_name")
+```
+
+```{r}
+mapping_stats <- counts_matrix_stats %>% 
+  filter(grepl("^N_[imnau].+", gene_name))
+
+# mapping_stats
+# write.csv(mapping_stats,"expression_data/kappe_s_PfHsMmu_counts_stats.csv", row.names = FALSE)
+```
+
+```{r}
+counts_matrix <- counts_matrix_stats %>% 
+  filter(!grepl("^N_[imnau].+", gene_name))
+
+head(counts_matrix)
+dim(counts_matrix) #92,141    47
+# write.csv(counts_matrix, "expression_data/kappe_s_PfHsMmu_raw_counts.csv", row.names = FALSE)
+```
+
+
+## References
+
+NOTE: the fasta reference was missing the Pf chromosome Pf3D7_API_v3 for some reason. It has ~300 genes on it. Also, the fasta did not include the mouse contigs - y_ctgu1, y_ctgu2, and y_ctgu3
+
+```{r}
+gff_df <- read.delim("species_genomes/PfHsMmu_grc.gff", sep="\t", comment.char = "#", header=FALSE) %>% 
+  mutate_at(vars(V7), ~gsub("^$","*", .)) %>% 
+  separate(V9, into=c("ID", "Parent", "Name"), sep=";", 
+           remove=FALSE, extra="merge", fill="right") %>% 
+  mutate_at(vars(Name), ~case_when(
+    grepl("^Name=", Parent) ~ Parent,
+    TRUE ~ .)) %>% 
+  mutate_at(vars(Parent), ~case_when(
+    grepl("^Name=", .) ~ NA_character_,
+    TRUE ~ .))
+
+head(gff_df)
+# table(gff_df$V7)
+# table(gff_df$V1)
+# write.csv(gff_df, "species_genomes/PfHsMmu_grc.gff.csv", row.names = FALSE)
+```
+
+```{r}
+species_genes <- gff_df %>% 
+  filter(grepl("exon", V3)) %>% 
+  select(V1,Parent) %>% 
+  distinct() %>% 
+  mutate(gene_name=gsub("Parent=","", Parent)) %>% 
+  mutate(genome=case_when(
+    grepl("^Hs", V1)  ~ "Human",
+    grepl("^Mmu", V1) ~ "Mouse", 
+    grepl("^Pf",V1) ~ "Plasmodium")) %>% 
+  filter(!grepl("Pf3D7_API_v3", V1), 
+         !grepl("Mmu_grc_y_ctgu[123]", V1)) %>% 
+  mutate(gene_symbol=str_split_fixed(gene_name, pattern=":", n=2)[,1])
+
+# head(species_genes)
+# tail(species_genes)
+
+dim(species_genes) #92,212     4
+# setdiff(species_genes$gene_name,counts_matrix$gene_name)
+# setdiff(counts_matrix$gene_name, species_genes$gene_name)
+
+
+# write.csv(species_genes,"species_genomes/PfHsMmu_grc_gene_annots.csv", row.names = FALSE)
+```
+
+```{r}
+table(species_genes$genome)
+```
+
+# Expression EDA 
+
+TR - technical replicate
+
+```{r}
+counts_matrix <- read.csv("expression_data/kappe_s_PfHsMmu_raw_counts.csv")
+sample_manifest <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_sample_manifest.csv")
+species_genes <- read.csv("species_genomes/PfHsMmu_grc_gene_annots.csv")
+mapping_stats <- read.csv("expression_data/kappe_s_PfHsMmu_counts_stats.csv")
+```
+
+```{r}
+counts_matrix_anno <- species_genes %>% 
+  left_join(., counts_matrix, by="gene_name") %>% 
+  pivot_longer(matches("unstranded_count"),
+               names_to="sample_id", 
+               values_to="counts") %>% 
+  mutate_at(vars(sample_id), ~gsub("_unstranded.+", "", .)) %>% 
+  left_join(., sample_manifest, by="sample_id")
+
+# head(counts_matrix_anno)
+```
+## Counted Reads vs Total Sequenced Reads 
+
+```{r}
+total_counts <- counts_matrix_anno %>% 
+  group_by(sample_id) %>% 
+  summarise(total_mapped_counts=sum(counts)) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = total_mapped_counts,
+               names_to="statistic", 
+               values_to="value")
+
+mapping_stats_long <- mapping_stats %>% 
+  pivot_longer(matches("unstranded_count"), 
+               names_to="sample_id",
+               values_to="value") %>% 
+  rename_at(vars(gene_name), ~c("statistic")) %>% 
+  mutate_at(vars(sample_id), ~gsub("_unstrand.+","", .))
+
+mapping_stats_comparison <- mapping_stats_long %>% 
+  bind_rows(., total_counts) %>% 
+  arrange(sample_id) %>% 
+  group_by(sample_id) %>% 
+  mutate(total_reads=sum(value)) %>% 
+  mutate(Percent=round(value/total_reads*100, digits=2)) %>% 
+  ungroup()
+
+
+mapping_stats_comparison
+```
+
+```{r}
+mapping_stats_comparison %>% 
+  filter(grepl("total_mapped_counts", statistic)) %>% 
+  View()
+```
+
+```{r}
+mapping_stats_comparison %>% 
+  filter(grepl("Day6.GFP_L1Pf6|L2Pf6_S8", sample_id))
+  # mutate(total_reads=sum(value)) %>% 
+  # mutate(Percent=round(value/total_reads*100, digits=2))
+```
+
+                      Day6.GFP_LPf6
+                      Number of input reads |	22,584,027
+                      Average input read length |	145
+                                    UNIQUE READS:
+                   Uniquely mapped reads number |	17941128
+                   
+                      
+                      L2Pf6_S8
+                      Number of input reads |	19,669,569
+                      Average input read length |	146
+                                    UNIQUE READS:
+                   Uniquely mapped reads number |	16366129
+                        Uniquely mapped reads % |	83.21%
+
+## Gene Expression by Genome
+
+```{r}
+counts_matrix_anno.filt <- counts_matrix_anno %>% 
+  group_by(gene_name) %>% 
+  filter(sum(counts >= 1) > 5)
+```
+
+```{r}
+test <- counts_matrix_anno.filt %>%
+  filter(sample_id=="Day6.GFP_L1Pf6")
+
+# head(test)
+# ggplot(test, aes(x=log2(counts+1),y=sample_id, fill=genome)) +
+#   geom_violin() +
+#   theme_classic()
+```
+
+```{r}
+density_plots <- purrr::map(unique(counts_matrix_anno.filt$sample_id), function(samp){
+  
+  ggplot(filter(counts_matrix_anno.filt, sample_id==samp), aes(x=log2(counts+1), fill=genome)) +
+    geom_density(alpha=0.5) +
+    labs(title=samp) +
+    theme_classic()
+  
+})
+```
+
+
+```{r fig.height=6, fig.width=8}
+density_plots
+```
+
 
 
 
