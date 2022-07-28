@@ -1,0 +1,1115 @@
+---
+title: "PF Liver Stage Sample Manifest"
+author: "Jenny L Smith"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Set-up 
+
+```{r set-up}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),
+                      tidy=TRUE,
+                      fig.align='center',
+                      fig.width = 10, fig.height = 10)
+
+options(stringsAsFactors = FALSE, max.print = 100)
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+```
+
+```{r message = FALSE, warning=FALSE}
+library(tidyr)
+library(tibble)
+library(magrittr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+library(ggpubr)
+library(patchwork)
+library(limma)
+library(edgeR)
+suppressPackageStartupMessages(library(sva))
+
+getwd()
+```
+
+# Define Functions 
+
+```{r}
+#from https://github.com/mikelove/DESeq2/blob/master/R/plots.R
+#Want to return the whole scores matrix so can examine 3d pca plots. 
+plotPCA.DESeq.mod <- function(object, intgroup="condition", ntop=500, returnData=FALSE, PC3=FALSE)
+{
+  library(matrixStats)
+  # calculate the variance for each gene
+  rv <- rowVars(assay(object))
+  
+  # select the ntop genes by variance
+  select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+  
+  # perform a PCA on the data in assay(x) for the selected genes
+  pca <- prcomp(t(assay(object)[select,]))
+  
+  # the contribution to the total variance for each component
+  percentVar <- pca$sdev^2 / sum( pca$sdev^2 )
+  
+  if (!all(intgroup %in% names(colData(object)))) {
+    stop("the argument 'intgroup' should specify columns of colData(dds)")
+  }
+  
+  intgroup.df <- as.data.frame(colData(object)[, intgroup, drop=FALSE])
+  
+  # add the intgroup factors together to create a new grouping factor
+  group <- if (length(intgroup) > 1) {
+    factor(apply( intgroup.df, 1, paste, collapse=":"))
+  } else {
+    colData(object)[[intgroup]]
+  }
+  
+  # assembly the data for the plot - first 10 PCs
+  # d <- data.frame(PC1=pca$x[,1], PC2=pca$x[,2], group=group, intgroup.df, name=colnames(object))
+  n <- min(10, ncol(as.data.frame(pca$x)))
+  d <- data.frame(as.data.frame(pca$x)[,1:n], group=group, intgroup.df, name=colnames(object))
+  
+  if (returnData) {
+    attr(d, "percentVar") <- percentVar[1:10]
+    rot <- pca$rotation[,1:10] #for first 10 PCs
+    dat <- list("scores"=d,"rotation"=rot)
+    return(dat)
+  }
+}
+
+#Updated on 6/9/17 to use variance stabilized transformed data as input (not center scaled log2, like in princomp)
+PCA <- function(expnData,phenovector,
+                title="",round=TRUE,colorCodes=NULL,
+                ntop=500, GOI=NULL){
+  
+  suppressPackageStartupMessages(library(DESeq2))
+  library(ggplot2)
+  #expnData is the raw counts (not normalized) has patient IDs as colnames and genes as rownames. 
+  
+  samples <- intersect(names(phenovector), colnames(expnData))
+  countData <- expnData[,samples]
+  phenovector <- phenovector[samples]
+  colData <- as.data.frame(phenovector)
+  
+  if(round){
+    countData <- round(countData, digits = 0)
+  }
+  
+  #Create as DESeq data set object (dds)
+  dds <- DESeqDataSetFromMatrix(countData = countData,
+                                  colData = colData,
+                                  design = ~ 1)
+  
+  #perform variance stabilized transformation 
+  dds <- dds[ rowSums(counts(dds)) > 10, ]
+  varianceStab <- vst(dds, blind = TRUE)
+  
+  #if given a list of genes of interest
+  if (! is.null(GOI)){
+    GOI <- intersect(GOI, rownames(assay(varianceStab)))
+  }else{
+    GOI <- 1:nrow(varianceStab)
+  }
+  
+  #PCA data frame with the wieghts/loadings and eigen vectors
+  pca.dat <- plotPCA.DESeq.mod(varianceStab[GOI,], 
+                               intgroup = "phenovector", 
+                               ntop = ntop,
+                               returnData=TRUE)
+  
+  plots <- lapply(c(2:3), function(pc){
+      percentVar <- attr(pca.dat$scores, which="percentVar")
+      y_var <- paste0("PC",pc)
+      
+      p <- ggplot(data=pca.dat$scores, 
+             aes_string(x="PC1", y=y_var, color="phenovector")) + 
+        geom_point(size=3, alpha=0.75) +
+        xlab(paste0("PC1: ",round(percentVar[1] * 100),"% variance")) +
+        ylab(paste0(y_var,": ",round(percentVar[pc] * 100),"% variance")) +
+        labs(title=title) +
+        theme_classic() +
+        theme(legend.position = "top")
+      if(!is.null(colorCodes)){
+        p <- p + 
+          scale_color_manual(values=colorCodes)
+      }
+      return(p)
+  })
+  
+  #Final Results object
+  res <- list(dds, varianceStab,pca.dat, plots)
+  names(res) <- c("dds", "vst","pca_data","pca_plots")
+  
+  if(is.character(GOI)){
+    res[["GOI"]] <- GOI
+  }
+  
+  return(res)
+}
+```
+
+```{r}
+#changed on 2/14/18, see bottom of Heatmaps_Function.r for the original one used.
+dge_dendrograms <- function(expnData, pheno, method,
+                            genelist=NULL,add.count=1, percent=0.05,
+                            ntop=500,filterTopGenes=FALSE, createDGE=TRUE,log=FALSE){
+  #df with count data, patient IDs are column names and rows are genes.
+  #pheno is a character vector with patient IDs as names, and the status for each in each group (eg pos,neg)
+  #genelist is a character vector with the genes of interest
+  #percent is the % of samples in the input expn matrix that must express a gene at 1 CPM. Filter to remove low count genes.
+  #set log=TRUE if providing a log2 expression dataframe.
+  #filterTopGenes shuold be a logical. If TRUE filter top 1000 most varied genes.
+  suppressPackageStartupMessages(require(edgeR))
+  suppressPackageStartupMessages(library(dendextend))
+  suppressPackageStartupMessages(library(matrixStats))
+
+  expnData <- expnData[, intersect(names(pheno), colnames(expnData))] #ensure correct order, drop rows with nas just in case
+  if(createDGE){
+    dge <- DGEList(counts = expnData)
+    #keep the rows (genes) with at least 1 CPM in a minimum of 2 samples or X% of samples. 
+    keep.dge <- rowSums(cpm(dge) >= 1) >= max(2,(percent*ncol(expnData))) 
+    # subset for those genes with cmp >= 1 per gene in samples
+    dge <- dge[keep.dge,] #
+    dge <- calcNormFactors(dge)
+    TMMCPM <- cpm(dge, normalized.lib.sizes = TRUE,
+                  log = TRUE, prior.count = add.count)
+
+  }else{
+    TMMCPM <- as.matrix(expnData)
+    if(!log){
+      TMMCPM <- log2(expnData+add.count) #log2 transform counts
+    }
+  }
+
+  if(is.null(genelist) & filterTopGenes){
+      # calculate the variance for each gene
+      rv <- rowVars(as.matrix(TMMCPM))
+      # select the ntop genes by variance
+      select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+      #select the top 1000 most varied genes
+      TMMCPM <- TMMCPM[select,]
+  }else if(!is.null(genelist)){
+    TMMCPM <- TMMCPM[which(rownames(TMMCPM) %in% genelist), ] #subset the matrix to genes of interest
+  }
+
+
+  d1 <- dist(t(TMMCPM), method = "euclidean", diag = FALSE,
+             upper = FALSE) #sample distances WITHOUT SCALING
+  d2 <- dist(TMMCPM, method = "euclidean", diag = FALSE,
+             upper = TRUE) #gene distances WITHOUT SCaling
+  samp.c1 <- hclust(d1, method = method, members = NULL) #sample clustering
+  gene.c2 <- hclust(d2, method = method, members = NULL) #gene clustering
+  list <- list(TMMCPM,samp.c1,gene.c2)
+  names(list) <- c("TMMCPM","samp.c1", "gene.c2")
+
+  return(list)
+}
+
+```
+
+```{r}
+create_annots_hmap <- function(expn, pheno_df, cols,
+                               goi=NULL,cc=NULL, 
+                               colorbar.height=5){
+  #expn is the normalized expression values with genes as rownames
+  #gene list a character vector
+  #goi are genes of interest to highlight on the Heatmap. Character vector of gene symbols
+  #cc are color codes in WHICH FORMAT?
+
+  #cols is a character vector of column names
+
+  #Example on how to use the reuslts
+
+  #hmap <- ComplexHmap(XXXX, hmap_anno_obj=res$annoColumn, XXX)
+  # draw(hmap + res$geneLabels, heatmap_legend_side="right", annotation_legend_side="right")
+
+    library(dplyr)
+    suppressPackageStartupMessages(library(ComplexHeatmap))
+
+    #subset the expression matix and the phenotype dataframe
+    anno <- pheno_df %>%
+      filter(rownames(.) %in% colnames(expn)) %>% 
+      rownames_to_column("id") %>% 
+      dplyr::select(id, all_of(cols)) %>%
+      mutate(id = factor(id, levels = colnames(expn))) %>%
+      arrange(id) %>%  #ensure same order as the expn matrix
+      column_to_rownames("id")
+  
+    #if no color codes provided, create one for each column
+    if(is.null(cc)){
+      pals <- c("npg", "aaas", "lancet", "jco", 
+                    "ucscgb", "uchicago", "simpsons",
+                    "rickandmorty")
+      #if there are more columns than color palettes, just repeat the set of available color palettes
+      if(length(ncol(anno)) > length(pals)){
+        pals <- rep(pals,  ceiling(ncol(anno)/length(pals)))
+      }
+      #define unique colors for each column
+      cc <- purrr::map(1:ncol(anno), function(i){
+          grps <- unique(anno[[i]])
+          ggpubr::get_palette(pals[i], k=length(grps)) %>% 
+            magrittr::set_names(grps)
+      })
+      names(cc) <- colnames(anno)
+    }
+    
+    #legend graphical parameters
+    n <- max(sapply(cc, length))
+    nrow <- ifelse(n <= 6, n, 6)
+    ncol=ceiling(n/nrow)
+    params <- list(show_legend=TRUE,
+                  labels_gp= gpar(fontsize=12),
+                  title_gp= gpar(fontsize=16),
+                  nrow = nrow,
+                  ncol=3,
+                  by_row=TRUE)
+    
+    #Create the complex heatmap annotation column
+    annoCol <- suppressWarnings(HeatmapAnnotation(df = dplyr::select(anno, all_of(cols)),
+                                   name="Main Groups",
+                                   col=cc,
+                                   which="column",
+                                   gap=unit(1,"mm"),
+                                   border = T,
+                                   show_annotation_name = TRUE,
+                                   annotation_name_gp=gpar(fontsize=12),
+                                   annotation_name_offset=unit(1,"mm"),
+                                   annotation_name_side="left",
+                                   annotation_height=unit(colorbar.height, "cm"),
+                                   annotation_legend_param = params,
+                                   simple_anno_size_adjust=TRUE))
+    res <- list("annoColumn"=annoCol)
+    if(!is.null(goi)){
+      regex <- paste0("^",goi,"$", collapse = "|")
+      goi.idx <- grep(regex, rownames(expn))
+      labels <- rownames(expn)[goi.idx] #needs to be numeric indexes for complexheatmap
+      #create the row (gene) labels object
+      labs <- rowAnnotation(link = anno_mark(at=goi.idx,
+                                             labels=labels,
+                                             which="row",
+                                             link_width=unit(1, "mm")),
+                            width= unit(1, "mm") + max_text_width(labels),
+                            gp=gpar(fontsize=4))
+
+      res[["geneLabels"]] <-  labs
+    }
+    return(res)
+}
+
+
+
+complex_hmap <- function(mat,
+                        hmap_anno_obj,
+                        hmap_anno_obj_genes=NULL,
+                        name="z-scores",
+                        scale=TRUE,
+                        space.type="sRGB",
+                        color_palette=NULL,
+                        split=NULL, 
+                        cluster.method="ward.D2",
+                        show_sample_ids=FALSE,
+                        dge_dendrograms.res=NULL,
+                        samp_dend_order=NULL){
+  #mat is the normalized, log2 (usually) transformed counts
+  #name is the title
+  #scale is whether to scale by row
+  #color palette is a colorRamp2() object.
+  #threshold is whether to make all z-scores in a certain range.
+  #hmap_anno_obj is from HeatmapAnnotation() function
+  #space.type is for the color/shades on the heatmap. See ?Heatmap for all the choices.
+  #dge_dendrograms.res is the list object output from the dge_dendrograms() function.
+  #samp_dend_order is the numeric vector or character vector of column names from the matrix (mat) or the dge_dengrograms.res$TMMCPM matix, in the desired order.
+
+  suppressPackageStartupMessages(library(ComplexHeatmap))
+  suppressPackageStartupMessages(require(circlize))
+  library(RColorBrewer)
+  suppressPackageStartupMessages(library(dendextend))
+  ht_opt$message = FALSE
+
+  if(is.null(color_palette)){
+    pal <- colorRamp2(c(-4,-2, 0, 2, 4),
+                      c("deepskyblue3", "deepskyblue","white", "red", "red3"),
+                      space=space.type)
+  }else{
+    pal <- color_palette
+  }
+  # col <- colorRampPalette(c("cyan1", "cyan2", "cyan3", "cyan4","azure4","magenta4", "magenta3", "magenta2", "magenta1"))(n=299)
+  #colorRamp2(c(-2, 0, 4), c("deepskyblue","white", "red"), space="RGB") #use for breaks.
+  # colorPal <- colorRampPalette(c("deepskyblue4", "deepskyblue3", "deepskyblue2", "deepskyblue1","white","red1", "red2", "red3", "red4"))(n=299)
+
+  #legend graphical parameters
+  params <-  list(color_bar="continuous",
+       legend_direction="horizontal",
+       title_position="leftcenter",
+       legend_width=unit(5,"cm"),
+       legend_height=unit(5,"cm"),
+       title_gp=gpar(fontsize=10,
+                     fontface="bold"))
+
+
+    if(scale){
+      mat <- t(scale(t(mat))) ##rowwise scaling
+    }
+    print(range(mat))
+  
+    if(!is.null(dge_dendrograms.res)){
+        if(is.null(samp_dend_order)){
+          clust <- dendextend::rotate(as.dendrogram(dge_dendrograms.res$samp.c1),
+                           order=c(ncol(mat):1))
+        }else{
+          clust <- dendextend::rotate(as.dendrogram(dge_dendrograms.res$samp.c1),
+                                  order=samp_dend_order)
+      }
+    }else{
+      clust=TRUE
+    }
+
+    #create the heatmap plot
+    hmap <- Heatmap(mat,
+                    name=name,
+                    col=pal,
+
+                    heatmap_legend_param=params,
+                    row_title="Genes",
+                    row_title_side="left",
+                    row_title_gp=gpar(fontsize=15,
+                                      fontface="bold"),
+                    show_row_names=FALSE,
+                    show_column_names=show_sample_ids,
+                    row_names_gp=gpar(fontsize=3),
+
+                    column_title="Samples",
+                    column_title_side="bottom",
+                    column_title_gp=gpar(fontsize=15,
+                                         fontface="bold"),
+                    column_title_rot=0,
+                    row_dend_width=unit(8,"mm"),
+                    column_dend_height=unit(22.5,"mm"),
+
+                    top_annotation=hmap_anno_obj,
+                    right_annotation = hmap_anno_obj_genes,
+                    split=split,
+
+                    clustering_distance_rows="euclidean",
+                    clustering_method_rows=cluster.method,
+                    clustering_method_columns = cluster.method,
+                    cluster_columns = clust,
+                    column_dend_reorder=FALSE)
+
+  return(hmap)
+}
+```
+
+```{r}
+create_pf_heatmaps <- function(TMMCPM,sample_annots, gene_annots,
+                               center_scale=TRUE,
+                               ntop=1000,order_ids=NULL,
+                               genelist=NULL,
+                               heatmap_colors=NULL){
+  pf_genes <- gene_annots %>% 
+    filter(genome=="PF3D7") %>% 
+    pull(gene_id)
+  
+  TMMCPM_all_pf <- TMMCPM[rownames(TMMCPM) %in% pf_genes, ]
+  dends <- dge_dendrograms(expnData = TMMCPM_all_pf, 
+                           pheno = pull(sample_annots, analysis_group, name = analysis_group_id), 
+                           method = "ward.D2",
+                           genelist = genelist, 
+                           ntop=ntop,
+                           log=FALSE,
+                           filterTopGenes = TRUE,
+                           createDGE = FALSE)
+  
+  # dim(dends$TMMCPM)
+  hmap_anno_obj <- create_annots_hmap(expn=dends$TMMCPM,
+                                      pheno_df = sample_annots,
+                                      cc=NULL,
+                                      colorbar.height=2,
+                                      cols = c("analysis_group"))
+  name <- ifelse(center_scale, "z-scores","log2_CPM")
+  complex_hmap(mat=dends$TMMCPM, 
+               scale=center_scale,
+               name=name,
+               hmap_anno_obj = hmap_anno_obj$annoColumn,
+               dge_dendrograms.res = dends,
+               samp_dend_order=order_ids,
+               color_palette=heatmap_colors,
+               show_sample_ids=TRUE)
+  
+}
+```
+
+```{r}
+#Function for Limma Voom differential expression 
+voom_de <- function(expnData, pheno, 
+                    ref, percent=0.05,
+                    logCPM=FALSE,
+                    trend=FALSE,
+                    GOI=NULL,
+                    eBayesRobust=FALSE,
+                    lmMethod="ls") {
+  # expnData is a matrix or data frame with the raw counts. Patient IDs as colnames, genes as rownames
+  # pheno is a character vector with patient IDs as names, and the status for each in each group(eg pos,neg)
+  #ref is a chacter vector of the reference level for DE. for example  ref="control". 
+  # percent is the fraction (0-1 numberic) of samples to include when setting an expression threshold. eg 5% of 
+  #trend is for using limma trend method with log2 CPMs
+  #normalization is for an extra method of normalization such as quantile if necessary. should be either FALSE or "qt" so far
+  #GOI is a character vector of genes (or numeric vector of row indices) of interest to subset at the end. keeps BH adjuted p-values more accurate. 
+
+  library(limma)
+  library(edgeR)
+  
+  #ensure correct order
+  expnData <- expnData[,match(names(pheno), colnames(expnData))]
+  
+  if (!all(complete.cases(expnData))){
+    message("Names DO NOT match in between phenovector and colnames of expression matrix")
+    return(list(expnData=expnData,pheno=pheno))
+  }
+  
+  #order so that reference is specified 
+  pheno.factor <- as.factor(pheno)
+  pheno.factor <- relevel(pheno.factor, ref=ref)
+  
+  #create the DGE list object
+  dge <- DGEList(counts = expnData, group = pheno.factor)
+  keep.dge <- rowSums(cpm(dge) >= 1) >= max(2,(percent*ncol(dge))) 
+  dge <- dge[keep.dge,] #subset for those genes with cpm >= 1 per gene in samples
+  dge <- calcNormFactors(dge, method = "TMMwsp") # TMM normalization
+  
+  #Create a design matrix and contrasts
+  design <- model.matrix(~0 + pheno.factor,
+                         data=dge$samples)#~0 means no intercept. 
+  colnames(design) <- levels(pheno.factor)
+  #contrast is approx. log2(mean(Mut)) - log2(mean(WT)) per gene. 
+  cont.matrix <- makeContrasts(contrasts = paste(rev(levels(pheno.factor)), collapse = "-"),
+                               levels = design) 
+  
+  if (is.null(GOI)){ 
+    GOI <- 1:nrow(dge)
+  }else{
+    GOI <- intersect(rownames(dge), GOI)
+    print(paste0("Length of GOI: ", length(GOI)))
+  }
+  #Run voom (compute appropriate observation-level weights)
+  voom_transformed <- voom(dge, design, plot = FALSE) 
+  type <- "voom"  #voom transformed counts for sample to sample comparisons.
+  print(type) #to confirm which type of DE is performed, trend or voom
+  
+  #fit the linear model. 
+  print(lmMethod)
+  fit <- lmFit(voom_transformed, design,method=lmMethod)
+  fit <- contrasts.fit(fit, contrasts = cont.matrix)
+  
+  #compute moderated t-statistics using empirical bayes moderation. 
+  fit2 <- eBayes(fit, robust=eBayesRobust)[GOI,]  
+
+  # select differentially expressed genes.
+  DE_table <-topTable(fit2,
+                adjust.method="BH",
+                sort.by="P",
+                number=Inf,
+                p.value=0.05,
+                lfc=1) #abs(logFC) >= 1 for all genes
+  
+  DE_table_all <-topTable(fit2,
+                  adjust.method="BH",
+                  sort.by="P",
+                  number=Inf)
+
+  list <- list(voom_transformed, fit2, DE_table, DE_table_all)
+  names(list) <- c(type,"eBayesFit", "DEGs", "all_genes")
+  return(list)
+}
+```
+
+# Sample Info
+
+```{r}
+sra_run_table <- read.csv("samples/SraRunTable.txt") %>% 
+  mutate(RNA_label=Run, 
+         to_concatenate="No",
+         infection_status="SPZ", 
+         time_point="Day0",
+         analysis_group="sporozorite", 
+         analysis_group_id=paste0(analysis_group, "_S", 2:5),
+         tissue_source="sporozorite",
+         paired_end=FALSE,
+         read_length=as.character(AvgSpotLen),
+         platform=Instrument,
+         parasite_species="Plasmodium falciparum",
+         read1_fastq=dir(file.path(ACTIVE,"taylor_s/people/jsmi26/RSC/kappe_s_2022.04_rnaseq_quant/results/sratools"), 
+                         pattern = "*.gz"), 
+         read2_fastq="") %>% 
+  select(sample_id_cat=Run, RNA_label:read2_fastq)
+
+head(sra_run_table)
+```
+
+```{r}
+#For the concatenated samples 
+sample_manifest_cated <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_concat_sample_manifest.csv") %>% 
+  group_by(analysis_group) %>%
+  mutate(analysis_group_id=case_when(
+    grepl("control|sporozorite", analysis_group) ~ glue::glue("{var}", "_S{1:n()}",
+                                                  var=analysis_group),
+    grepl("_Pf[\\+-]", analysis_group) ~ glue::glue("{var}", "_S{1:n()}","{var2}",
+                                                   var=gsub("(Day[0-9].+)_Pf.$","\\1",analysis_group),
+                                                   var2=gsub("Day[0-9].+(_Pf.)$","\\1",analysis_group)))) %>%
+  ungroup() %>%
+  select(sample_id_cat:analysis_group, analysis_group_id, everything()) %>%
+  bind_rows(sra_run_table) %>%
+  mutate(batch=case_when(
+            grepl("SRR", sample_id_cat) ~ "sra",
+            TRUE ~ "kappe_unpub") %>% 
+           factor(., levels=c("sra", "kappe_unpub"))) %>% 
+  mutate(analysis_factor_group=as.factor(gsub("\\+","", analysis_group)) %>%
+                                     relevel(., ref="sporozorite"),
+        infection_status=factor(infection_status, levels=c("SPZ", "Infected"))) %>%
+  as.data.frame() %>%
+  set_rownames(.$sample_id_cat)
+
+# head(sample_manifest_cated)
+dim(sample_manifest_cated)
+table(sample_manifest_cated$analysis_factor_group, 
+      sample_manifest_cated$batch)
+
+# write.csv(sample_manifest_cated, "samples/Kappe_s_2022.04_PF_LiverStage_sra_and_concat_sample_manifest.csv", row.names = FALSE)
+```
+
+# Select Input Samples
+
+```{r}
+#Only including the Pf samples for the parasites paper
+pf_samples <- sample_manifest_cated %>% 
+  filter(grepl("SPZ|Infected", infection_status)) %>% 
+  select(sample_id_cat,
+         analysis_group_id,
+         infection_status, 
+         time_point, 
+         analysis_group, 
+         everything()) %>% 
+  droplevels() %>% 
+  set_rownames(.$sample_id_cat)
+
+
+table(pf_samples$analysis_factor_group)
+table(pf_samples$batch, pf_samples$infection_status)
+dim(pf_samples)
+# head(pf_samples)
+
+# write.csv(pf_samples, "samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sample_manifest_7.25.2022.csv",row.names = FALSE)
+```
+
+# Genome References
+
+```{r}
+#Gene Refs
+species_genes <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_annots.csv") %>% 
+  select(gene_name, gene_id, everything()) %>% 
+  arrange(gene_id) %>% 
+  set_rownames(.$gene_id)
+
+# head(species_genes)
+# dim(species_genes)
+table(species_genes$genome)
+```
+
+```{r}
+pf_genes <- species_genes %>% 
+  filter(genome=="PF3D7")
+
+dim(pf_genes)
+```
+
+
+# Gene Counts 
+
+```{r}
+counts_matrix_cated <- read.csv("raw_counts/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_raw_counts.csv") %>% 
+  rename_at(vars(gene_name), ~c("gene_id")) %>% 
+  select(all_of(c("gene_id", sample_manifest_cated$sample_id_cat))) %>%
+  arrange(gene_id) %>% 
+  set_rownames(.$gene_id)
+
+head(counts_matrix_cated)
+dim(counts_matrix_cated)
+# dim(sample_manifest_cated)
+```
+
+```{r}
+#All Pf+/- samples
+pf_counts <- counts_matrix_cated[pf_genes$gene_id,]
+dim(pf_counts)
+pf_dge <- edgeR::DGEList(counts = pf_counts[,-1],
+                         samples = sample_manifest_cated,
+                         remove.zeros=FALSE)
+
+pf_keep <- rowSums(edgeR::cpm(pf_dge) > 1) >= 3
+pf_dge <- pf_dge[pf_keep,]
+pf_dge <- edgeR::calcNormFactors(pf_dge, method="TMMwsp")
+pf_TMMCPM <- as.data.frame(edgeR::cpm(pf_dge, normalized.lib.sizes = TRUE, log=FALSE))
+
+dim(pf_TMMCPM)  #5188   31
+head(pf_TMMCPM[,1:5])
+rm(pf_keep)
+```
+
+```{r}
+#Only including the Pf samples for the parasites paper
+pf_sel_mat <- as.matrix(counts_matrix_cated[pf_genes$gene_id,pf_samples$sample_id_cat])
+keep <- rowSums(cpm(pf_sel_mat) > 1) >= 3
+table(keep)
+
+pf_sel_dge <- DGEList(counts = pf_sel_mat[keep,],
+                      samples = pf_samples)
+pf_sel_dge <- edgeR::calcNormFactors(pf_sel_dge, method="TMMwsp")
+
+
+pf_sel_CPM <- cpm(pf_sel_dge,normalized.lib.sizes=TRUE, log=FALSE)
+dim(pf_sel_CPM)
+rm(keep)
+```
+ 
+# Expression Set Object
+
+```{r}
+##Only including the Pf samples for the parasites paper
+exprs <- Biobase::ExpressionSet(assayData=log2(pf_sel_CPM+1),
+                                phenoData = Biobase::AnnotatedDataFrame(pf_samples),
+                                featureData = Biobase::AnnotatedDataFrame(pf_genes[rownames(pf_sel_CPM),]),
+                                annotation="Pf3D7v58")
+
+
+exprs
+# saveRDS(exprs, "expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_expressionSet.RDS")
+```
+
+# Uncorrected Counts 
+
+```{r}
+grps <- levels(pf_sel_dge$samples$analysis_factor_group)[-1]
+ref <- levels(pf_sel_dge$samples$analysis_factor_group)[1]
+
+comparisons <- purrr::map(grps, function(grp){
+  comparison <- c(ref, grp)
+  subset <- pf_sel_dge[,pf_sel_dge$samples$analysis_factor_group %in% comparison]
+  subset$samples$analysis_factor_group <- droplevels(subset$samples$analysis_factor_group)
+  
+  pheno <- subset$samples$analysis_factor_group %>% 
+    set_names(subset$samples$sample_id_cat)
+
+  voom_de(expnData=subset$counts,
+          pheno = pheno,
+          ref = ref)
+
+})
+names(comparisons) <- grps
+```
+
+```{r}
+save=FALSE
+statement <- "Differential expression analysis with limma voom comparing:"
+correction <- "counts not corrected for batch effect"
+
+DEGs <- lapply(names(comparisons), function(grp){
+  outfile <- paste0("DEGs/kappe_s_", grp,"_vs_sporozorite_uncorrected_DEGs.csv")
+  x <- comparisons[[grp]]
+  
+  notes <- x$voom$targets %>% 
+      group_by(group) %>%
+      dplyr::count() %>%
+      ungroup() %>% 
+      arrange(desc(group)) %>% 
+      mutate(description=paste(group, paste0("N=(",n,")"))) %>%
+      select(description) %>%
+      unlist() %>%
+      paste(., collapse = " vs ") %>% 
+      paste(statement, ., collapse=" ")
+
+  
+  df <- x$DEGs %>% 
+    arrange(desc(logFC)) %>% 
+    rownames_to_column("gene_id")
+  
+  if(save){
+    con <- file(outfile, open="wt")
+    lapply(c(notes, correction), function(comment)   writeLines( paste("#",comment), con))
+    write.csv(df, con, row.names = FALSE, quote=FALSE)
+    close(con)
+  }
+  df
+})
+
+# DEGs
+# range(comparisons$Day2_Heps_Pf$DEGs$logFC)
+# dim(comparisons$Day2_Heps_Pf$DEGs)
+```
+
+```{r}
+# dim(pf_sel_dge)
+# lapply(comparisons, function(x) nrow(x$DEGs)/nrow(pf_dge))
+# lapply(comparisons, function(x) nrow(x$DEGs))
+# lapply(comparisons, function(x) x$eBayesFit$contrasts)
+```
+
+
+# Combat Seq 
+
+https://bioconductor.org/packages/release/bioc/vignettes/sva/inst/doc/sva.pdf
+
+It uses a negative binomial regression
+to model the count matrix, and estimate parameters representing the batch
+effects. Then it provides adjusted data by mapping the original data to an
+expected distribution if there were no batch effects. 
+
+In contrast, direct adjustment only removes the effect of known batch variables.
+All sources of latent biological variation will remain in the data using this approach.
+
+```{r}
+quantile(pf_dge$counts)
+```
+
+```{r}
+cb <- readRDS("expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS")
+
+# cb <- ComBat_seq(pf_dge$counts, #use raw counts
+#                  batch = pf_dge$samples$batch, 
+#                  group = pf_dge$samples$analysis_factor_group,
+#                  shrink=FALSE)
+
+quantile(cb) # 0 1,316,352
+# saveRDS(cb,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS")
+```
+
+```{r eval=FALSE}
+# Should not be necessary - see original publication
+cb_shrink <- ComBat_seq(pf_dge$counts, #use raw counts
+                 batch = pf_dge$samples$batch, 
+                 group = pf_dge$samples$analysis_factor_group,
+                 shrink=TRUE)
+
+dim(cb_shrink) #5188   31
+quantile(cb_shrink) #0 1,312,321
+```
+
+```{r}
+pf_combat_full_dge <- DGEList(counts=cb,
+                              samples=sample_manifest_cated)
+
+pf_combat_full_dge <- edgeR::calcNormFactors(pf_combat_full_dge, method="TMMwsp")
+
+dim(pf_combat_full_dge)
+range(pf_combat_full_dge$counts)
+```
+
+
+```{r}
+pf_combat_dge <- DGEList(counts=cb[,pf_samples$sample_id_cat],
+                         samples=pf_samples)
+
+pf_combat_dge <- edgeR::calcNormFactors(pf_combat_dge, method="TMMwsp")
+dim(pf_combat_dge)
+range(pf_combat_dge$counts)
+```
+
+```{r}
+# head(pf_combat_dge$samples)
+# head(pf_sel_dge$samples)
+```
+
+```{r}
+grps <- levels(pf_combat_dge$samples$analysis_factor_group)[-1]
+ref <- levels(pf_combat_dge$samples$analysis_factor_group)[1]
+
+combat_de <- purrr::map(grps, function(grp){
+  comparison <- c(ref, grp)
+  subset <- pf_combat_dge[,pf_combat_dge$samples$analysis_factor_group %in% comparison]
+  subset$samples$analysis_factor_group <- droplevels(subset$samples$analysis_factor_group)
+  
+  pheno <- subset$samples$analysis_factor_group %>% 
+    set_names(subset$samples$sample_id_cat)
+
+  voom_de(expnData=subset$counts,
+          pheno = pheno,
+          ref = ref)
+
+})
+names(combat_de) <- grps
+```
+
+```{r}
+# a strong increase in DEGs in Day 2 and Day 4 vs SPZ, but otherwise a change of ~ +200-300 more DE genes identified. 
+bind_cols(sapply(combat_de, function(x) dim(x$DEGs)),
+  sapply(comparisons, function(x) dim(x$DEGs))) %>% 
+  select(colnames(.)[order(colnames(.))])
+```
+
+```{r}
+save=false
+statement <- "Differential expression analysis with limma voom comparing:"
+correction <- "counts corrected for batch effect: combat-seq"
+
+combat_DEGs <- lapply(names(combat_de), function(grp){
+  x <- combat_de[[grp]]
+
+  notes <- x$voom$targets %>%
+      group_by(group) %>%
+      dplyr::count() %>%
+      ungroup() %>%
+      arrange(desc(group)) %>%
+      mutate(description=paste(group, paste0("N=(",n,")"))) %>%
+      select(description) %>%
+      unlist() %>%
+      paste(., collapse = " vs ") %>%
+      paste(statement, ., collapse=" ")
+
+
+  df <- x$DEGs %>%
+    arrange(desc(logFC)) %>% 
+    rownames_to_column("gene_id")
+  
+   df_all <- x$all_genes %>%
+    arrange(desc(logFC)) %>% 
+    rownames_to_column("gene_id")
+  
+  if(save){
+    outfile <- paste0("DEGs/kappe_s_", grp,"_vs_sporozorite_combat-seq_corrected_DEGs.csv")
+    con <- file(outfile, open="wt")
+    lapply(c(notes, correction), function(comment)   writeLines( paste("#",comment), con))
+    write.csv(df, con, row.names = FALSE, quote=FALSE)
+    close(con)
+    
+    outfile <- paste0("DEGs/kappe_s_", grp,"_vs_sporozorite_combat-seq_corrected_unfiltered_DEGs.csv")
+    con <- file(outfile, open="wt")
+    lapply(c(notes, correction), function(comment)   writeLines( paste("#",comment), con))
+    write.csv(df_all, con, row.names = FALSE, quote=FALSE)
+    close(con)
+  }
+  df
+})
+
+combat_DEGs
+```
+
+```{r}
+# dim(pf_combat_dge)
+# lapply(combat_de, function(x) nrow(x$DEGs)/nrow(pf_combat_dge))
+# lapply(combat_de, function(x) x$eBayesFit$contrasts)
+# lapply(combat_de, function(x) x$voom$design)
+
+
+sapply(combat_de, function(x) nrow(x$DEGs))
+sapply(combat_de, function(x) nrow(x$all_genes))
+```
+
+
+### Comparison Corrected vs Uncorrected
+
+https://github.com/mani2012/BatchQC/blob/master/R/utils.R
+
+```{r}
+# install.packages("../../BatchQC_1.21.0.tar.gz", type="source", repos = NULL)
+suppressPackageStartupMessages(library(BatchQC, lib.loc = normalizePath("~/R/x86_64-pc-linux-gnu-library/4.1")))
+```
+
+
+```{r}
+combat_genes <- lapply(combat_DEGs, pull, "gene_id")
+uncorrected_genes <- lapply(DEGs, pull, "gene_id")
+
+olap <- purrr::map2(.x=combat_genes, .y=uncorrected_genes, .f=intersect)
+
+#from 59% to 78% of the same DEGs are identified in the corrected results
+# (sapply(olap, length))
+round(sapply(olap, length) / sapply(combat_genes, length)*100, digits = 0)
+
+#It includes about 83-85% of the uncorrected DEGs
+olap_uncor <- purrr::map2(.y=combat_genes, .x=uncorrected_genes, .f=intersect)
+round(sapply(olap_uncor, length) / sapply(uncorrected_genes, length)*100, digits = 0)
+```
+
+batchqc_explained_variation
+pf_sel_dge #N=17, unadjusted
+pf_dge #N=31, combat-seq
+pf_combat_full_dge #N=31 combat-seq
+pf_combat_dge #N=17, combat-seq
+
+```{r}
+dim(pf_combat_full_dge)
+combat_explained_var <- batchqc_explained_variation(cpm(pf_combat_full_dge, log=TRUE),
+                                                    condition=pf_combat_full_dge$samples$analysis_factor_group,
+                                                    batch=pf_combat_full_dge$samples$batch)
+# $explained_variation
+# str(combat_explained_var)
+head(combat_explained_var$explained_variation)
+```
+
+```{r}
+dim(pf_dge)
+explained_var <- batchqc_explained_variation(cpm(pf_dge, log=TRUE),
+                                             condition=pf_dge$samples$analysis_factor_group,
+                                             batch=pf_dge$samples$batch)
+# $explained_variation
+str(explained_var)
+# head(explained_var$explained_variation)
+```
+
+```{r}
+corrected_vs_uncorrected <- combat_explained_var$explained_variation %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  mutate(status="combat-seq") %>% 
+  bind_rows(., as.data.frame(explained_var$explained_variation) %>% 
+              rownames_to_column("gene_id") %>% 
+              mutate(status="uncorrected")) %>% 
+  # mutate_all(~as.character(.)) %>% 
+  pivot_longer(cols = matches("condition|batch"), 
+               names_to="column_name", values_to="value")
+
+
+head(corrected_vs_uncorrected)
+```
+
+```{r}
+
+plt_varexp_full <- ggplot(corrected_vs_uncorrected, aes(x=column_name, y=value, fill=status)) +
+  geom_boxplot() +
+  facet_wrap(~status, nrow=1, ncol=2) +
+  labs(y="Explained variation") +
+  theme_bw() +
+  theme(axis.title.x = element_blank(),
+        legend.position = "none")
+
+
+# pdf("figures/combat_seq/percent_var_explained_combat-seq_vs_uncorrected.pdf", height = 6, width = 8)
+plt_varexp_full
+# dev.off()
+```
+
+
+
+# SVA
+
+https://bioconductor.org/packages/release/bioc/vignettes/sva/inst/doc/sva.pdf
+
+```{r}
+run_sva_de <- function(eset, sel_groups){
+  
+    eset <- eset[, as.character(eset$analysis_factor_group) %in% sel_groups] 
+    eset$analysis_factor_group <- droplevels(eset$analysis_factor_group)
+    edata <- Biobase::exprs(eset)
+    edata <- edata[rowSums(edata) > 0, ]
+    
+    pdata <- Biobase::pData(eset)
+    
+    mod <- model.matrix(~analysis_factor_group,
+                      data=pdata)
+    mod0 = model.matrix(~1,
+                        data=pdata)
+    n.sv = num.sv(edata,
+                  mod,
+                  method="leek")
+
+    print(n.sv)
+    svobj = sva(edata,
+                mod,
+                mod0,
+                n.sv=n.sv) # https://support.bioconductor.org/p/95383/ -
+    colnames(svobj$sv) <- paste0("sv_",1:n.sv)
+    
+    modSv <- cbind(mod,svobj$sv)
+    mod0Sv <- cbind(mod0,svobj$sv)
+    
+    res <- list("e"=edata,"sv_full"=modSv, "sv_null"=mod0Sv,"full"=mod,"null"=mod0)
+    return(res)
+}
+```
+
+```{r}
+comparisons <- list(c("Day2_Heps_Pf","sporozorite"),
+                    c("Day4_Heps_Pf","sporozorite"),
+                    c("Day5_Heps_Pf","sporozorite"),
+                    c("Day6_Heps_Pf","sporozorite"))
+
+sva_objs <- lapply(comparisons, run_sva_de, eset=exprs)
+names(sva_objs) <- sapply(comparisons, `[[`, 1)
+```
+
+```{r}
+dim(Biobase::exprs(exprs))
+# rowMeans(Biobase::exprs(exprs))[order(rowMeans(Biobase::exprs(exprs)))] %>% head(., n=20)
+hist(Biobase::exprs(exprs))
+```
+
+
+```{r}
+t <- sva_objs$Day4_Heps_Pf
+pValues = f.pvalue(t$e, t$full, t$null)
+qValues = p.adjust(pValues,method="BH")
+table(qValues < 0.05)
+
+
+sv_pValues = f.pvalue(t$e,t$sv_full,t$sv_null)
+sv_qValues = p.adjust(pValues,method="BH")
+
+table(sv_qValues < 0.05)
+```
+
+
+
+## Example SVA
+
+```{r}
+suppressPackageStartupMessages(library(bladderbatch))
+data(bladderdata)
+
+
+pheno = pData(bladderEset)
+edata = exprs(bladderEset)
+range(edata)
+# [1]  2.769673 14.026953 - what type of preprocessing happend to this eset???
+
+bmod <- model.matrix(~as.factor(cancer), data=pheno)
+bmod0 = model.matrix(~1,data=pheno) 
+bn <- num.sv(edata,bmod,method="leek")
+bsvobj = sva(edata,bmod,bmod0,n.sv=bn)
+
+
+contrast.matrix <- cbind("C1"=c(-1,1,0,rep(0,svobj$n.sv)),
+                         "C2"=c(0,-1,1,rep(0,svobj$n.sv)),
+                         "C3"=c(-1,0,1,rep(0,svobj$n.sv)))
+bmodSv = cbind(bmod,bsvobj$sv)
+
+# dim(bmod)
+bmodSv
+contrast.matrix
+```
+
+
+# Share the Data 
+
+I think I need to consider best practices here... not sure yet. 
+
+```{bash}
+rsync -av figures /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+rsync -av expression_data /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+rsync -av presentations /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+rsync -av DEGs /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+cp limma_column_descriptions.xlsx /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+```
+
+
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
+
+
+

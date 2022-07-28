@@ -4,12 +4,23 @@
 .RData
 .Ruserdata
 .html
+
+# Workflow Data/Results
 #https://stackoverflow.com/questions/40460216/how-do-i-make-git-ignore-symlink
 resources
 resources/
 results/
-species_genomes/
 references/notes.txt
 expression_data/
+figures/
+DEGs/
+00_archive/
+raw_counts/
+qc_data/
+references/
+species_genomes
+limma*
+samples/
+presentations/
 ~*
 *.gmt

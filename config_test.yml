@@ -1,6 +1,0 @@
-genomeDir: "resources/genome"
-fasta: "resources/genome/genome.fa"
-gtf: "resources/genome/genes.gtf"
-
-samples:
-    - Day0.Naive_L1Pf7
