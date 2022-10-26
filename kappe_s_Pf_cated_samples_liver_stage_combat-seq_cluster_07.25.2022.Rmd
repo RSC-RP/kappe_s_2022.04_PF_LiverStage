@@ -503,10 +503,11 @@ dim(combat_matrix_cated) #5184   17
 ```{r}
 #Gene Refs
 species_genes <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_annots.csv") %>% 
-  select(gene_name, gene_id, everything()) %>% 
+  dplyr::select(gene_name, gene_id, everything()) %>% 
   set_rownames(.$gene_id)
 
-# head(species_genes)
+head(species_genes)
+# filter(species_genes, genome=="PF3D7")
 ```
 
 # Counts and Normalization 
@@ -847,6 +848,7 @@ purrr::map(paste0("Day",c(2,4:6)), function(day){
 })
 ```
 
+# 
 
 # Share the Data 
 

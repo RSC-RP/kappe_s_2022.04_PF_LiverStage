@@ -1,0 +1,500 @@
+---
+title: "alternative splicing"
+author: "Jenny L Smith"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Set-up 
+
+```{r set-up}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),
+                      tidy=TRUE,
+                      fig.align='center',
+                      fig.width = 10, fig.height = 10)
+
+options(stringsAsFactors = FALSE, max.print = 100)
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+```
+
+```{r message = FALSE, warning=FALSE}
+library(tidyr)
+library(tibble)
+library(magrittr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+library(ggpubr)
+library(patchwork)
+library(limma)
+library(edgeR)
+library(SummarizedExperiment)
+library(patchwork)
+```
+
+```{r}
+conflicted::conflict_prefer("select","dplyr")
+conflicted::conflict_prefer("filter","dplyr")
+```
+
+# Define Functions 
+
+```{r}
+#Function to create symlinks to the original data files on active to the current working directory of the R project. 
+mk_symlinks <- function(linked_dirname,filepaths){
+  
+  if(!dir.exists(linked_dirname)){
+    dir.create(linked_dirname, recursive = TRUE)
+  }
+  
+  lapply(filepaths,function(file){
+    target <- file.path(linked_dirname, basename(file))
+    if(!file.exists(target)){
+      command <- paste0("ln -svf '",file,"' '",target, "'")
+      system(command)
+    }
+  })
+}
+```
+
+
+# Sample Manifest and Expression Data
+
+```{r}
+pf_samples <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sample_manifest_7.25.2022.csv") %>% 
+  set_rownames(.$sample_id_cat)
+
+dim(pf_samples)
+table(pf_samples$analysis_group)
+```
+
+```{r}
+cb_se <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS")
+
+cb_se
+```
+
+```{r}
+cb_eset <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_expressionSet.RDS")
+
+# cb_eset
+```
+
+
+# Genomic References 
+
+```{r}
+txDB <- AnnotationDbi::loadDb(file="species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7.sqlite")
+# txDB <- GenomicFeatures::makeTxDbFromGFF(file="species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7.gtf")
+# AnnotationDbi::saveDb(txDB,file = "PlasmoDB-58_Pfalciparum3D7.sqlite")
+```
+
+```{r}
+genes_gr <- genes(txDB)
+exons_gr <- exonsBy(txDB, "gene")
+# genes_gr
+width(genes_gr) %>% quantile(probs=0.99) #14,487.82
+```
+
+```{r}
+gene_lens <- data.frame(gene=names(genes_gr),
+                        length_bp=width(genes_gr))
+
+# pdf("figures/splicing/gene_length_histogram.pdf", height = 5, width = 7)
+ggplot(gene_lens, aes(x=length_bp)) +
+  geom_histogram(binwidth = 50) +
+  labs(y="Number of Genes") +
+  geom_vline(xintercept = quantile(gene_lens$length_bp,probs=0.99)) +
+  theme_classic()
+# dev.off()
+```
+
+```{r}
+num_exons <- data.frame(num_exons=sapply(exons_gr, length))
+
+# pdf("figures/splicing/gene_exons_histogram.pdf", height = 5, width = 7)
+ggplot(num_exons, aes(x=num_exons)) +
+  geom_histogram(binwidth = 1) +
+  labs(y="Number of Gene") +
+  scale_x_continuous(breaks = c(1:5, seq(10,50, by=5))) +
+  theme_classic()
+# dev.off()
+```
+
+```{r}
+exons_by_length <- num_exons %>% 
+  rownames_to_column("gene") %>% 
+  left_join(.,gene_lens, by="gene") %>% 
+  arrange(
+    desc(length_bp)
+    # desc(num_exons)
+          ) 
+
+# pdf("figures/splicing/number_of_exons_by_gene_length.pdf", height = 5, width = 7)
+ggplot(exons_by_length, aes(x=length_bp, y=num_exons)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_classic()
+# dev.off()
+```
+
+```{r}
+genome_fasta <- Biostrings::readDNAStringSet("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_Genome.fasta")
+names(genome_fasta) <- names(genome_fasta) %>%  str_split_fixed(" | ", n=2) %>% .[,1]
+```
+
+STAR can also utilize annotations formatted as a list of splice junctions coordinates in a text file:
+--sjdbFileChrStartEnd /path/to/sjdbFile.txt. 
+
+This file should contains 4 columns separated by tabs: Chr \tab Start \tab End \tab Strand=+/-/
+
+Here Start and End are first and last bases of the introns (1-based chromosome coordinates)
+
+```{r}
+chrom_sizes <- GRanges(seqnames = S4Vectors::Rle(names(genome_fasta)),
+                       ranges = IRanges(start=1,end = width(genome_fasta)))
+
+# chrom_sizes
+# export is making the BED file 0 based??
+rtracklayer::export.bed(chrom_sizes,
+                    con="species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_Genome.chrom_sizes.bed")
+```
+
+
+# Dasper 
+
+Required Inputs:
+- STAR splice junctions
+- BigWig coverage files
+
+https://bioconductor.org/packages/release/bioc/vignettes/dasper/inst/doc/dasper.html
+
+https://www.biorxiv.org/content/10.1101/2021.03.29.437534v1.full
+
+https://github.com/LieberInstitute/megadepth
+
+```{r}
+# BiocManager::install("dasper")
+# BiocManager::install("megadepth")
+
+library(dasper)
+library(megadepth)
+# options(MulticoreParam=quote(BiocParallel::MulticoreParam(4)))
+
+# default installation path: ~/bin
+# install_megadepth() # only run 1x
+```
+
+## Data Preparation 
+
+### STAR output
+
+```{r}
+#symlink the STAR splice junctions 
+star_output <- "/active/taylor_s/people/jsmi26/RSC/kappe_s_2022.04_rnaseq_quant/results/star"
+indexes <- "/active/taylor_s/people/jsmi26/RSC/kappe_s_2022.04_rnaseq_quant/results/samtools"
+
+if(length(dir("star/")) == 0 ){
+ links <-  mk_symlinks(linked_dirname = here::here("star"),
+                      filepaths = dir(star_output,
+                                      pattern = "SJ.out.tab|.bam",
+                                      full.names = TRUE))
+ bai_links <- mk_symlinks(linked_dirname = here::here("star"), 
+                         filepaths = dir(indexes,
+                                         pattern = ".bai",
+                                         full.names = TRUE))
+}
+```
+
+
+```{r}
+bams <- dir("star", 
+            pattern = ".bam$", 
+            full.names = TRUE) %>% 
+  here::here(.)
+
+head(bams)
+
+dir.create("star/pf_aligned",recursive = TRUE)
+outbams <- basename(bams) %>% 
+  gsub(".Aligned.",".Pf_Aligned.", .) %>%  
+  file.path(here::here(),"star/pf_aligned", .)
+
+# head(outbams)
+```
+
+```{r eval=FALSE}
+regions_bed <- here::here("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_Genome.chrom_sizes.bed")
+save_scripts <- purrr::map2(.x = bams, .y = outbams, function(input,output){
+  
+  samtools_cmd <- glue::glue("samtools view -h -M -L {regions_bed} --output {output} {input}")
+  
+  script_name <- basename(output) %>% 
+    gsub(".sortedByCoord.out.bam", ".sh", .)
+
+  cat(samtools_cmd, 
+      file=file.path("star/pf_aligned/", script_name),
+      sep="\n")
+  
+})
+```
+
+```{bash eval=FALSE}
+conda env create -f env/samtools.yml
+conda activate samtools
+cd star/pf_aligned/
+for file in $(ls -1 *.sh)
+do
+  chmod +x $file 
+  ./$file
+done
+
+for file in $(ls -1 *.bam)
+do
+  samtools index $file
+done
+```
+
+```{r eval=FALSE}
+sj_tabs <- dir("star", pattern = "*.tab", full.names=TRUE) %>% 
+  file.path(here::here(), .)
+
+chrom_names <- names(genome_fasta) %>% 
+  paste(., collapse="|")
+
+subset_sjs <- purrr::map(sj_tabs, function(sjs){
+  outfile <- basename(sjs) %>% 
+    gsub(".SJ.",".Pf_SJ.", .) %>% 
+    file.path(here::here(), "star/pf_aligned", .)
+  
+  cmd <- glue::glue("grep -E \"{chrom_names}\" {sjs} > {outfile}")
+  if(!file.exists(outfile)){
+    system(cmd)
+  }
+  
+})
+```
+
+
+### Convert BAM to BigWigs
+
+```{r eval=FALSE}
+dir.create("star/bigwigs", recursive = T, showWarnings = F)
+
+save_bigwigs <- purrr::map(outbams,function(infile){
+  
+  in_prefix <- basename(infile) %>% 
+      gsub(".bam","",.) %>% 
+      paste0("star/bigwigs/", .)
+  if(!file.exists(paste0(in_prefix,"all.bw")))
+  megadepth::bam_to_bigwig(bam_file = infile,
+                         prefix = in_prefix,
+                         overwrite = FALSE)
+})
+```
+
+
+## Dasper workflow
+
+### All Days 2,4,5,6 
+
+```{r}
+junc_files <- data.frame(SJ.out.tab=dir("star/pf_aligned", pattern = "*.tab", full.names = T) %>% 
+                           file.path(here::here(), .)) %>% 
+  mutate(sample_id_cat = basename(SJ.out.tab) %>% gsub(".Pf_SJ.out.tab","", .)) 
+
+bw_files <- data.frame(bw=dir("star/bigwigs", pattern = "*.bw", full.names = TRUE) %>% 
+                         file.path(here::here(), .)) %>% 
+  mutate(sample_id_cat = basename(bw) %>%  gsub(".Pf_Aligned.+", "", .))
+
+
+pf_samples_dasper <- pf_samples %>% 
+  left_join(., junc_files, by="sample_id_cat") %>% 
+  left_join(., bw_files, by="sample_id_cat") %>% 
+  mutate(controls=ifelse(analysis_group=="sporozorite", TRUE, FALSE))
+
+pf_samples_dasper
+# write.csv(pf_samples_dasper,"splicing/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_dasper_samples.csv")
+```
+
+```{r}
+juncs <- junction_load(junction_paths = pf_samples_dasper$SJ.out.tab,
+                       metadata = pf_samples_dasper,
+                       controls = pf_samples_dasper$controls)
+
+juncs
+```
+
+```{r}
+all_juncs_annot <- junction_filter(juncs, 
+                         count_thresh = c(raw = 3),
+                         n_samp = c(raw = 3),
+                         width_range = c(20,32487)) %>% 
+  junction_annot(ref= txDB) %>% 
+  junction_norm()
+
+dim(all_juncs_annot) # 8636   17
+```
+
+
+```{r}
+bw_case <- pf_samples_dasper$bw[!pf_samples_dasper$controls]
+bw_control <- pf_samples_dasper$bw[pf_samples_dasper$controls]
+
+
+pf_junctions <-
+    junction_process(junctions = juncs,
+                     ref = txDB, 
+                     count_thresh = c(raw = 3),
+                     n_samp = c(raw = 3),
+                     width_range = c(20,32487))
+colData(pf_junctions)$samp_id <- rownames(colData(pf_junctions))
+
+pf_cov <- pf_junctions %>% 
+    coverage_process(ref = txDB,
+        coverage_paths_case = bw_case,
+        coverage_paths_control = bw_control,
+        bp_param = BiocParallel::MulticoreParam(5)) 
+
+#fitting outlier detection model with parameters: behaviour=deprecated, bootstrap=FALSE, contamination=auto, max_features=1, max_samples=auto, n_estimators=100, n_jobs=NULL, random_state=NULL, verbose=0, warm_start=FALSE"
+pf_scores <- pf_cov %>% 
+    outlier_process(samp_id_col = "sample_id_cat",
+                    # bp_param = BiocParallel::MulticoreParam(5)
+                    bp_param = BiocParallel::SerialParam()
+                    )
+```
+
+```{r}
+outscores_clean <- pf_scores %>% 
+  as.data.frame() %>% 
+  left_join(., pf_samples_dasper, by=c("samp_id"="sample_id_cat")) %>% 
+  mutate(has_gene_id=sapply(gene_id_cluster, function(x) length(x) > 0)) %>% 
+  select(samp_id, analysis_group_id, analysis_group,has_gene_id, everything())
+
+dim(outscores_clean)
+# write.csv(outscores_clean, "splicing/dasper_D2456_vs_SPZ_splicing_results.csv", row.names = FALSE)
+```
+
+
+## Viz
+
+```{r}
+dim(pf_junctions) # 8636   12s
+# pf_cov
+assays(pf_junctions)
+assays(pf_cov)
+
+table(rowData(pf_junctions)$type) %>% 
+  as.data.frame() 
+  # write.csv(.,"splicing/types_of_juncs_after_filt_table.csv", row.names = F)
+# pf_scores %>%  head()
+```
+
+```{r}
+no_gene_id <- outscores_clean %>% 
+  filter(!has_gene_id) 
+
+no_gene_id[["junctions"]][1]
+no_gene_id[["gene_id_cluster"]][1]
+
+temp <- pf_junctions[rowData(pf_junctions)$index %in% c(5409,5415)] 
+temp@rowRanges
+width(temp) #26,440 20,780
+```
+
+```{r}
+# table(duplicated(outscores_clean$cluster_index))
+# table(outscores_clean$has_gene_id)
+
+recurrent_juncs <- outscores_clean %>% 
+  arrange(cluster_index) %>% 
+  group_by(cluster_index) %>% 
+  mutate(mean_rank=mean(rank),
+         n_samples_with_junc=n()) %>% 
+  ungroup() %>% 
+  select(samp_id:cluster_index, 
+         mean_rank, n_samples_with_junc,
+         everything()) %>% 
+  filter(n_samples_with_junc > 2) %>% 
+  filter(has_gene_id) %>% 
+  arrange(mean_rank,analysis_group) 
+
+# dim(recurrent_juncs)
+recurrent_juncs
+```
+
+```{r fig.height=10, fig.width=10}
+NUMBER <- 217
+id <- recurrent_juncs %>% 
+  filter(cluster_index == NUMBER) %>% 
+  pull(gene_id_cluster) %>% 
+  unlist() %>% 
+  unique()
+
+samples <- recurrent_juncs %>% 
+  filter(cluster_index == NUMBER) %>% 
+  pull(analysis_group_id) 
+
+print(id)
+print(samples)
+sp <- dasper::plot_sashimi(junctions = all_juncs_annot, 
+                     ref = txDB, 
+                     case_id = list(analysis_group_id = samples),
+                     annot_colour = ggpubr::get_palette("jco", 7),
+                     # sum_func = NULL,
+                     gene_tx_id = id,
+                     gene_tx_col = "gene_id")
+
+pdf(paste0("figures/splicing/",id,"_sashimi_plot.pdf"),
+    onefile = FALSE,
+    height = 10, width = 10)
+sp
+dev.off()
+```
+
+```{r}
+# colData(chk) %>% as.data.frame() %>%  head()
+```
+
+## Example Data 
+
+```{r}
+# use GenomicState to load txdb (GENCODE v31)
+ref <- GenomicState::GenomicStateHub(
+    version = "31",
+    genome = "hg38",
+    filetype = "TxDb"
+)[[1]]
+
+junctions_processed <- junction_process(
+    junctions_example,
+    ref,
+    types = c("ambig_gene", "unannotated")
+)
+
+sashimi_plot <- plot_sashimi(
+    junctions = junction_filter(junctions_processed),
+    ref = ref,
+    gene_tx_id = "ENSG00000142156.14",
+    gene_tx_col = "gene_id",
+    sum_func = NULL
+)
+
+sashimi_plot
+
+
+test <- junction_filter(junctions_processed)
+length(test)
+# mcols(test)
+colData(test)
+```
+
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+

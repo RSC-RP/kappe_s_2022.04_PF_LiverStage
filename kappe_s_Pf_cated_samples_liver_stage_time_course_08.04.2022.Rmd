@@ -1,0 +1,2137 @@
+---
+title: "PF Liver Stage Time Course Analysis"
+author: "Jenny L Smith"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Set-up 
+
+```{r set-up}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),
+                      tidy=TRUE,
+                      fig.align='center',
+                      fig.width = 10, fig.height = 10)
+
+options(stringsAsFactors = FALSE, max.print = 100)
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+```
+
+```{r message = FALSE, warning=FALSE}
+library(tidyr)
+library(tibble)
+library(magrittr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+library(ggpubr)
+library(patchwork)
+library(limma)
+library(edgeR)
+library(SummarizedExperiment)
+library(patchwork)
+library(maSigPro)
+suppressPackageStartupMessages(library(mclust))
+
+```
+
+# Define Functions 
+
+```{r}
+#from https://github.com/mikelove/DESeq2/blob/master/R/plots.R
+#Want to return the whole scores matrix so can examine 3d pca plots. 
+plotPCA.DESeq.mod <- function(object, intgroup="condition", ntop=500, returnData=FALSE, PC3=FALSE)
+{
+  library(matrixStats)
+  # calculate the variance for each gene
+  rv <- rowVars(assay(object))
+  
+  # select the ntop genes by variance
+  select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+  
+  # perform a PCA on the data in assay(x) for the selected genes
+  pca <- prcomp(t(assay(object)[select,]))
+  
+  # the contribution to the total variance for each component
+  percentVar <- pca$sdev^2 / sum( pca$sdev^2 )
+  
+  if (!all(intgroup %in% names(colData(object)))) {
+    stop("the argument 'intgroup' should specify columns of colData(dds)")
+  }
+  
+  intgroup.df <- as.data.frame(colData(object)[, intgroup, drop=FALSE])
+  
+  # add the intgroup factors together to create a new grouping factor
+  group <- if (length(intgroup) > 1) {
+    factor(apply( intgroup.df, 1, paste, collapse=":"))
+  } else {
+    colData(object)[[intgroup]]
+  }
+  
+  # assembly the data for the plot - first 10 PCs
+  # d <- data.frame(PC1=pca$x[,1], PC2=pca$x[,2], group=group, intgroup.df, name=colnames(object))
+  n <- min(10, ncol(as.data.frame(pca$x)))
+  d <- data.frame(as.data.frame(pca$x)[,1:n], group=group, intgroup.df, name=colnames(object))
+  
+  if (returnData) {
+    attr(d, "percentVar") <- percentVar[1:10]
+    rot <- pca$rotation[,1:10] #for first 10 PCs
+    dat <- list("scores"=d,"rotation"=rot)
+    return(dat)
+  }
+}
+
+#Updated on 6/9/17 to use variance stabilized transformed data as input (not center scaled log2, like in princomp)
+PCA <- function(expnData,phenovector,
+                title="",round=TRUE,colorCodes=NULL,
+                ntop=500, GOI=NULL){
+  
+  suppressPackageStartupMessages(library(DESeq2))
+  library(ggplot2)
+  #expnData is the raw counts (not normalized) has patient IDs as colnames and genes as rownames. 
+  
+  samples <- intersect(names(phenovector), colnames(expnData))
+  countData <- expnData[,samples]
+  phenovector <- phenovector[samples]
+  colData <- as.data.frame(phenovector)
+  
+  if(round){
+    countData <- round(countData, digits = 0)
+  }
+  
+  #Create as DESeq data set object (dds)
+  dds <- DESeqDataSetFromMatrix(countData = countData,
+                                  colData = colData,
+                                  design = ~ 1)
+  
+  #perform variance stabilized transformation 
+  dds <- dds[ rowSums(counts(dds)) > 10, ]
+  varianceStab <- vst(dds, blind = TRUE)
+  
+  #if given a list of genes of interest
+  if (! is.null(GOI)){
+    GOI <- intersect(GOI, rownames(assay(varianceStab)))
+  }else{
+    GOI <- 1:nrow(varianceStab)
+  }
+  
+  #PCA data frame with the wieghts/loadings and eigen vectors
+  pca.dat <- plotPCA.DESeq.mod(varianceStab[GOI,], 
+                               intgroup = "phenovector", 
+                               ntop = ntop,
+                               returnData=TRUE)
+  
+  plots <- lapply(c(2:3), function(pc){
+      percentVar <- attr(pca.dat$scores, which="percentVar")
+      y_var <- paste0("PC",pc)
+      
+      p <- ggplot(data=pca.dat$scores, 
+             aes_string(x="PC1", y=y_var, color="phenovector")) + 
+        geom_point(size=3, alpha=0.75) +
+        xlab(paste0("PC1: ",round(percentVar[1] * 100),"% variance")) +
+        ylab(paste0(y_var,": ",round(percentVar[pc] * 100),"% variance")) +
+        labs(title=title) +
+        theme_classic() +
+        theme(legend.position = "top")
+      if(!is.null(colorCodes)){
+        p <- p + 
+          scale_color_manual(values=colorCodes)
+      }
+      return(p)
+  })
+  
+  #Final Results object
+  res <- list(dds, varianceStab,pca.dat, plots)
+  names(res) <- c("dds", "vst","pca_data","pca_plots")
+  
+  if(is.character(GOI)){
+    res[["GOI"]] <- GOI
+  }
+  
+  return(res)
+}
+```
+
+```{r}
+#changed on 2/14/18, see bottom of Heatmaps_Function.r for the original one used.
+dge_dendrograms <- function(expnData, pheno, method,
+                            genelist=NULL,add.count=1, percent=0.05,
+                            ntop=500,filterTopGenes=FALSE, createDGE=TRUE,log=FALSE){
+  #df with count data, patient IDs are column names and rows are genes.
+  #pheno is a character vector with patient IDs as names, and the status for each in each group (eg pos,neg)
+  #genelist is a character vector with the genes of interest
+  #percent is the % of samples in the input expn matrix that must express a gene at 1 CPM. Filter to remove low count genes.
+  #set log=TRUE if providing a log2 expression dataframe.
+  #filterTopGenes shuold be a logical. If TRUE filter top 1000 most varied genes.
+  suppressPackageStartupMessages(require(edgeR))
+  suppressPackageStartupMessages(library(dendextend))
+  suppressPackageStartupMessages(library(matrixStats))
+
+  expnData <- expnData[, intersect(names(pheno), colnames(expnData))] #ensure correct order, drop rows with nas just in case
+  if(createDGE){
+    dge <- DGEList(counts = expnData)
+    #keep the rows (genes) with at least 1 CPM in a minimum of 2 samples or X% of samples. 
+    keep.dge <- rowSums(cpm(dge) >= 1) >= max(2,(percent*ncol(expnData))) 
+    # subset for those genes with cmp >= 1 per gene in samples
+    dge <- dge[keep.dge,] #
+    dge <- calcNormFactors(dge)
+    TMMCPM <- cpm(dge, normalized.lib.sizes = TRUE,
+                  log = TRUE, prior.count = add.count)
+
+  }else{
+    TMMCPM <- as.matrix(expnData)
+    if(!log){
+      TMMCPM <- log2(expnData+add.count) #log2 transform counts
+    }
+  }
+
+  if(is.null(genelist) & filterTopGenes){
+      # calculate the variance for each gene
+      rv <- rowVars(as.matrix(TMMCPM))
+      # select the ntop genes by variance
+      select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+      #select the top 1000 most varied genes
+      TMMCPM <- TMMCPM[select,]
+  }else if(!is.null(genelist)){
+    TMMCPM <- TMMCPM[which(rownames(TMMCPM) %in% genelist), ] #subset the matrix to genes of interest
+  }
+
+
+  d1 <- dist(t(TMMCPM), method = "euclidean", diag = FALSE,
+             upper = FALSE) #sample distances WITHOUT SCALING
+  d2 <- dist(TMMCPM, method = "euclidean", diag = FALSE,
+             upper = TRUE) #gene distances WITHOUT SCaling
+  samp.c1 <- hclust(d1, method = method, members = NULL) #sample clustering
+  gene.c2 <- hclust(d2, method = method, members = NULL) #gene clustering
+  list <- list(TMMCPM,samp.c1,gene.c2)
+  names(list) <- c("TMMCPM","samp.c1", "gene.c2")
+
+  return(list)
+}
+
+```
+
+```{r}
+create_annots_hmap <- function(expn, pheno_df, cols,
+                               goi=NULL,cc=NULL, 
+                               colorbar.height=5){
+  #expn is the normalized expression values with genes as rownames
+  #gene list a character vector
+  #goi are genes of interest to highlight on the Heatmap. Character vector of gene symbols
+  #cc are color codes in WHICH FORMAT?
+
+  #cols is a character vector of column names
+
+  #Example on how to use the reuslts
+
+  #hmap <- ComplexHmap(XXXX, hmap_anno_obj=res$annoColumn, XXX)
+  # draw(hmap + res$geneLabels, heatmap_legend_side="right", annotation_legend_side="right")
+
+    library(dplyr)
+    suppressPackageStartupMessages(library(ComplexHeatmap))
+
+    #subset the expression matix and the phenotype dataframe
+    anno <- pheno_df %>%
+      dplyr::filter(rownames(.) %in% colnames(expn)) %>% 
+      rownames_to_column("id") %>% 
+      dplyr::select(id, all_of(cols)) %>%
+      mutate(id = factor(id, levels = colnames(expn))) %>%
+      arrange(id) %>%  #ensure same order as the expn matrix
+      column_to_rownames("id")
+  
+    #if no color codes provided, create one for each column
+    if(is.null(cc)){
+      pals <- c("npg", "aaas", "lancet", "jco", 
+                    "ucscgb", "uchicago", "simpsons",
+                    "rickandmorty")
+      #if there are more columns than color palettes, just repeat the set of available color palettes
+      if(length(ncol(anno)) > length(pals)){
+        pals <- rep(pals,  ceiling(ncol(anno)/length(pals)))
+      }
+      #define unique colors for each column
+      cc <- purrr::map(1:ncol(anno), function(i){
+          grps <- unique(anno[[i]])
+          ggpubr::get_palette(pals[i], k=length(grps)) %>% 
+            magrittr::set_names(grps)
+      })
+      names(cc) <- colnames(anno)
+    }
+    
+    #legend graphical parameters
+    n <- max(sapply(cc, length))
+    nrow <- ifelse(n <= 6, n, 6)
+    ncol <- ceiling(n/nrow)
+    params <- list(show_legend=TRUE,
+                  labels_gp= gpar(fontsize=12),
+                  title_gp= gpar(fontsize=16),
+                  nrow = nrow,
+                  ncol=ncol,
+                  by_row=TRUE)
+    
+    #Create the complex heatmap annotation column
+    annoCol <- suppressWarnings(HeatmapAnnotation(df = dplyr::select(anno, all_of(cols)),
+                                   name="Main Groups",
+                                   col=cc,
+                                   which="column",
+                                   gap=unit(1,"mm"),
+                                   border = T,
+                                   show_annotation_name = TRUE,
+                                   annotation_name_gp=gpar(fontsize=12),
+                                   annotation_name_offset=unit(1,"mm"),
+                                   annotation_name_side="left",
+                                   annotation_height=unit(colorbar.height, "cm"),
+                                   annotation_legend_param = params,
+                                   simple_anno_size_adjust=TRUE))
+    res <- list("annoColumn"=annoCol)
+    if(!is.null(goi)){
+      regex <- paste0("^",goi,"$", collapse = "|")
+      goi.idx <- grep(regex, rownames(expn))
+      labels <- rownames(expn)[goi.idx] #needs to be numeric indexes for complexheatmap
+      #create the row (gene) labels object
+      labs <- rowAnnotation(link = anno_mark(at=goi.idx,
+                                             labels=labels,
+                                             which="row",
+                                             link_width=unit(1, "mm")),
+                            width= unit(1, "mm") + max_text_width(labels),
+                            gp=gpar(fontsize=4))
+
+      res[["geneLabels"]] <-  labs
+    }
+    return(res)
+}
+
+
+
+complex_hmap <- function(mat,
+                        hmap_anno_obj,
+                        hmap_anno_obj_genes=NULL,
+                        name="z-scores",
+                        scale=TRUE,
+                        space.type="sRGB",
+                        color_palette=NULL,
+                        split=NULL, 
+                        cluster.method="ward.D2",
+                        show_sample_ids=FALSE,
+                        dge_dendrograms.res=NULL,
+                        samp_dend_order=NULL){
+  #mat is the normalized, log2 (usually) transformed counts
+  #name is the title
+  #scale is whether to scale by row
+  #color palette is a colorRamp2() object.
+  #threshold is whether to make all z-scores in a certain range.
+  #hmap_anno_obj is from HeatmapAnnotation() function
+  #space.type is for the color/shades on the heatmap. See ?Heatmap for all the choices.
+  #dge_dendrograms.res is the list object output from the dge_dendrograms() function.
+  #samp_dend_order is the numeric vector or character vector of column names from the matrix (mat) or the dge_dengrograms.res$TMMCPM matix, in the desired order.
+
+  suppressPackageStartupMessages(library(ComplexHeatmap))
+  suppressPackageStartupMessages(require(circlize))
+  library(RColorBrewer)
+  suppressPackageStartupMessages(library(dendextend))
+  ht_opt$message = FALSE
+
+  if(is.null(color_palette)){
+    pal <- colorRamp2(c(-4,-2, 0, 2, 4),
+                      c("deepskyblue3", "deepskyblue","white", "red", "red3"),
+                      space=space.type)
+  }else{
+    pal <- color_palette
+  }
+  # col <- colorRampPalette(c("cyan1", "cyan2", "cyan3", "cyan4","azure4","magenta4", "magenta3", "magenta2", "magenta1"))(n=299)
+  #colorRamp2(c(-2, 0, 4), c("deepskyblue","white", "red"), space="RGB") #use for breaks.
+  # colorPal <- colorRampPalette(c("deepskyblue4", "deepskyblue3", "deepskyblue2", "deepskyblue1","white","red1", "red2", "red3", "red4"))(n=299)
+
+  #legend graphical parameters
+  params <-  list(color_bar="continuous",
+       legend_direction="horizontal",
+       title_position="leftcenter",
+       legend_width=unit(5,"cm"),
+       legend_height=unit(5,"cm"),
+       title_gp=gpar(fontsize=10,
+                     fontface="bold"))
+
+
+    if(scale){
+      mat <- t(scale(t(mat))) ##rowwise scaling
+    }
+    print(range(mat))
+  
+    if(!is.null(dge_dendrograms.res)){
+        if(is.null(samp_dend_order)){
+          clust <- dendextend::rotate(as.dendrogram(dge_dendrograms.res$samp.c1),
+                           order=c(ncol(mat):1))
+        }else{
+          clust <- dendextend::rotate(as.dendrogram(dge_dendrograms.res$samp.c1),
+                                  order=samp_dend_order)
+      }
+    }else{
+      clust=TRUE
+    }
+
+    #create the heatmap plot
+    hmap <- Heatmap(mat,
+                    name=name,
+                    col=pal,
+
+                    heatmap_legend_param=params,
+                    row_title="Genes",
+                    row_title_side="left",
+                    row_title_gp=gpar(fontsize=15,
+                                      fontface="bold"),
+                    show_row_names=FALSE,
+                    show_column_names=show_sample_ids,
+                    row_names_gp=gpar(fontsize=3),
+
+                    column_title="Samples",
+                    column_title_side="bottom",
+                    column_title_gp=gpar(fontsize=15,
+                                         fontface="bold"),
+                    column_title_rot=0,
+                    row_dend_width=unit(8,"mm"),
+                    column_dend_height=unit(22.5,"mm"),
+
+                    top_annotation=hmap_anno_obj,
+                    right_annotation = hmap_anno_obj_genes,
+                    split=split,
+                    row_gap = unit(5, "mm"),
+
+                    clustering_distance_rows="euclidean",
+                    clustering_method_rows=cluster.method,
+                    clustering_method_columns = cluster.method,
+                    cluster_columns = clust,
+                    column_dend_reorder=FALSE)
+
+  return(hmap)
+}
+```
+
+```{r}
+create_pf_heatmaps <- function(TMMCPM,sample_annots, gene_annots,
+                               center_scale=TRUE,
+                               ntop=1000,order_ids=NULL,
+                               genelist=NULL,
+                               split=NULL,
+                               heatmap_colors=NULL){
+  pf_genes <- gene_annots %>% 
+    as.data.frame() %>% 
+    dplyr::filter(genome=="PF3D7") %>% 
+    pull(gene_id)
+  
+  TMMCPM_all_pf <- TMMCPM[rownames(TMMCPM) %in% pf_genes, ]
+  dends <- dge_dendrograms(expnData = TMMCPM_all_pf, 
+                           pheno = pull(sample_annots, analysis_factor_group, name = masigpro_id), 
+                           method = "ward.D2",
+                           genelist = genelist, 
+                           ntop=ntop,
+                           log=FALSE,
+                           filterTopGenes = TRUE,
+                           createDGE = FALSE)
+  
+  # dim(dends$TMMCPM)
+  hmap_anno_obj <- create_annots_hmap(expn=dends$TMMCPM,
+                                      pheno_df = sample_annots,
+                                      cc=NULL,
+                                      colorbar.height=2,
+                                      cols = c("analysis_factor_group"))
+  
+  name <- ifelse(center_scale, "z-scores","log2_CPM")
+  res <- complex_hmap(mat=dends$TMMCPM, 
+               scale=center_scale,
+               name=name,
+               hmap_anno_obj = hmap_anno_obj$annoColumn,
+               dge_dendrograms.res = dends,
+               samp_dend_order=order_ids,
+               color_palette=heatmap_colors,
+               split=split,
+               show_sample_ids=TRUE)
+  
+  return(list("dends"=dends,"heatmap"=res))
+  
+}
+```
+
+```{r}
+#Pheatmap
+quickPheatmap <- function(expn,geneList, sample_data,
+                          gene_index=NULL,
+                          annots_col_colors=NULL){
+  library(pheatmap)
+
+  len <- 299
+  col <- colorRampPalette(c("deepskyblue4", "deepskyblue3", "deepskyblue2", "deepskyblue1","white","red1", "red2", "red3", "red4"))(n=len)
+
+  e <- expn[geneList, intersect(colnames(expn), rownames(sample_data))]
+  sample_data <- sample_data[intersect(colnames(expn), rownames(sample_data)), ]
+  anno.col <- sample_data
+  #if scaling, this doesnt work. would need to scale the expression matrix myself
+  # Breaks <- c(seq(min(e), 0, length.out=ceiling(len/2) + 1),
+  #             seq(max(e)/len, max(e), length.out=floor(len/2)))
+ 
+  if(is.null(annots_col_colors)){
+    annots_col_colors <- lapply(anno.col, function(column){
+        grps <- unique(column)
+        n <- length(grps)
+        pal <- RColorBrewer::brewer.pal(n,name="Set1")
+        names(pal) <- grps
+        return(pal)
+      })
+  }
+
+
+  p <- pheatmap::pheatmap(mat= e ,
+                     color=col,
+                     border_color="black",
+                     scale = "row", 
+                     cluster_rows=FALSE,
+                     cluster_cols=TRUE,
+                     clustering_method="ward.D2",
+                     clustering_distance_cols="correlation",
+                     annotation_names_col=TRUE,
+                     annotation_col = anno.col,
+                     annotation_colors = annots_col_colors,
+                     gaps_row=gene_index,
+                     show_rownames=TRUE,
+                     fontsize_row=5,
+                     fontsize_col = 10,
+                     # kmeans_k=9,
+                     show_colnames=TRUE)
+
+
+  return(p)
+
+}
+```
+
+
+# Sample Manifest and Expression Data
+
+```{r}
+pf_samples <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sample_manifest_7.25.2022.csv") %>% 
+  set_rownames(.$sample_id_cat)
+
+dim(pf_samples)
+table(pf_samples$analysis_group)
+```
+
+```{r}
+cb_se <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS")
+
+cb_se
+```
+
+```{r}
+cb_eset <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_expressionSet.RDS")
+
+cb_eset
+```
+
+
+
+# TrendCatcher
+
+General opinion: Not a particularly good algorithm to use - it lacks the ability to test trends for genes with 0 expression in one condition (eg 0 counts in treatment but 10 counts in control group). 
+
+Also, its very specific to human or mouse datasets, without any option to build your own OrgDb object and provide your own list of pathways or GO terms. 
+
+```{r}
+# devtools::install_github("jaleesr/TrendCatcher", dependencies = TRUE, build_vignettes = FALSE)
+suppressPackageStartupMessages(library(TrendCatcher))
+```
+
+```{r}
+# example.file.path<-system.file("extdata", "Brain_DemoCountTable.csv", package = "TrendCatcher")
+# tb<-read.csv(example.file.path)
+# head(tb)
+```
+
+```{r}
+# dir.create("time_course")
+
+newIDs <- colData(cb_se) %>% 
+  as_tibble() %>%
+  dplyr::filter(time_point != "Day2") %>% 
+  group_by(time_point) %>% 
+  mutate(trendCatcher_id=paste("Pf", gsub("Day", "", time_point), paste0("Rep", 1:n()), sep="_")) %>% 
+  ungroup() %>% 
+  arrange(trendCatcher_id) %>% 
+  dplyr::select(sample_id_cat, trendCatcher_id,analysis_group_id,infection_status, time_point)
+
+newIDs
+
+counts <- as.data.frame(assay(cb_se,"raw_counts")[,newIDs$sample_id_cat]) %>%
+  rownames_to_column("GENE ENSEMBL") %>%
+  rename_at(vars(newIDs$sample_id_cat), ~c(newIDs$trendCatcher_id)) %>% 
+  pivot_longer(cols = matches("Pf"), 
+               names_to="trendCatcher_id",
+               values_to="counts") %>% 
+  left_join(.,  newIDs, by="trendCatcher_id") %>% 
+  group_by(infection_status, `GENE ENSEMBL`) %>%
+  mutate(remove=all(counts==0)) %>%
+  ungroup() %>% 
+  group_by(`GENE ENSEMBL`) %>% 
+  mutate_at(vars(remove), ~ifelse(any(remove==TRUE), TRUE, .)) %>% 
+  ungroup() %>% 
+  dplyr::filter(!remove) %>% 
+  dplyr::select(`GENE ENSEMBL`, trendCatcher_id, counts) %>% 
+  pivot_wider(names_from=trendCatcher_id, values_from=counts)
+  
+# counts
+# nrow(assay(cb_se,"raw_counts")) - nrow(counts)
+# write.csv(counts, "time_course/trendCatcher_counts.csv", row.names = FALSE)
+```
+3 genes unique expressed only in the heps samples:
+
+GENE ENSEMBL
+PF3D7_1425000			
+PF3D7_API01200			
+PF3D7_API02200		
+
+43 genes expressed only in the heps samples - should ask why these are causing an issue with the algorithm 
+
+
+```{r}
+# The algorithm cannot handle cases where there is 0 expression in the heps samples, and non-zero expression in all 6 SPZ samples. 
+# assay(cb_se,"raw_counts") %>% 
+#   as.data.frame() %>% 
+#   rownames_to_column("GENE ENSEMBL") %>%
+#   dplyr::filter(`GENE ENSEMBL`=="PF3D7_0400500") %>% #PF3D7_0200500
+#   View()
+```
+
+```{r eval=FALSE}
+#Running time is ~1 min  
+tc_res <- run_TrendCatcher(count.table.path = "time_course/trendCatcher_counts.csv",
+                              baseline.t = 0,
+                              time.unit = "day",
+                              min.low.count = 1,
+                              para.core.n = NA,
+                              dyn.p.thres = 0.001, #threshold of adjusted p-value
+                              show.verbose = FALSE)
+# 
+# saveRDS(tc_res, "time_course/trendCatcher_day0456_results.RDS")
+```
+
+```{r}
+# tc_res$t.arr
+# length(unique(tc_res$fitted.count$Gene))
+# table(tc_res$master.table$pattern)
+# quantile(tc_res$master.table$dyn.p.val.adj)
+# table(tc_res$master.table$dyn.p.val.adj > 0.001)
+```
+
+```{r eval=FALSE}
+tc_res$master.table  <- tc_res$master.table  %>% 
+  as.data.frame() %>% 
+  mutate(gene_id=Gene) %>%  
+  left_join(., dplyr::select(as.data.frame(fData(cb_eset)), 
+                             Symbol=gene_name,
+                             gene_id, 
+                             gene_biotype,
+                             description), 
+            by="gene_id") %>% 
+  arrange(dyn.p.val.adj) %>% 
+  as.data.frame()
+```
+
+```{r eval=FALSE}
+table(tc_res$master.table$pattern)
+
+top10_per_pattern <- tc_res$master.table %>% 
+  group_by(pattern) %>% 
+  slice(1:9) %>% 
+  ungroup() %>% 
+  arrange(pattern)
+
+
+goi <- purrr::map(unique(top10_per_pattern$pattern), function(dir){
+  top10_per_pattern %>% 
+    dplyr::filter(pattern==dir) %>% 
+    pull(Symbol)
+})
+names(goi) <- unique(top10_per_pattern$pattern)
+# sapply(goi, length)
+```
+
+
+```{r fig.height=6, fig.width=12, eval=FALSE}
+gene_level_plots <- purrr::map(names(goi), function(dir){
+   draw_GeneTraj(master.list = tc_res,
+                  gene.symbol.arr = goi[[dir]],
+                  ncol = 3)
+})
+
+names(gene_level_plots) <- names(goi)
+# gene_level_plots$down_up_
+```
+
+```{r eval=FALSE}
+draw_TrajClusterGrid(master.list = tc_res, min.traj.n = 10)
+
+?draw_TimeHeatmap_GO
+```
+
+# maSigPro
+
+https://www.bioconductor.org/packages/release/bioc/vignettes/maSigPro/inst/doc/maSigProUsersGuide.pdf
+
+maSigPro follows a two steps regression strategy to find genes with significant temporal
+expression changes and significant differences between experimental groups.
+
+The data.abiotic object is a matrix with normalized gene expression data.
+
+```{r}
+design_input <- colData(cb_se) %>% 
+  as_tibble() %>%
+  dplyr::select(sample_id_cat, 
+                analysis_group_id,
+                infection_status,
+                analysis_factor_group,
+                Time=time_point) %>% 
+  group_by(Time) %>% 
+  mutate(masigpro_id=paste("Pf",  Time, 
+                           paste0("Rep", 1:n()), sep="_")) %>% 
+  ungroup() %>% 
+  mutate(Time=as.numeric(gsub("Day", "", Time)),
+         Replicate=as.numeric(analysis_factor_group),
+         Group=1) %>% 
+         # Control=ifelse(Time==0, 1, 0),
+         # Infection=ifelse(Time==0, 0, 1)) %>% 
+  ungroup() %>% 
+  arrange(Time) %>% 
+  dplyr::select(masigpro_id, everything()) %>% 
+  as.data.frame() %>% 
+  set_rownames(.$masigpro_id)
+  
+head(design_input)
+
+
+expression <- log2(assay(cb_se,"cpm")+1)[,design_input$sample_id_cat]
+colnames(expression) <- rownames(design_input)
+# head(expression[,1:7])
+```
+
+## All Days 
+
+```{r}
+pf_design <- make.design.matrix(dplyr::select(design_input,Time:Group),
+                                degree = 1)
+
+# Could use edgeR to define theta, rather than using the default value
+fit <- readRDS("time_course/masigpro_fit_p.vector_D2456.RDS")
+tstep <- readRDS("time_course/masigpro_tstep_D2456.RDS")
+
+# fit <- p.vector(expression, pf_design,
+#                 counts=TRUE,
+#                 Q = 0.05,
+#                 MT.adjust = "BH",
+#                 min.obs = 5)
+
+
+# tstep <- T.fit(fit,
+#                step.method = "backward")
+
+# saveRDS(tstep,"time_course/masigpro_tstep_D2456.RDS")
+#  saveRDS(fit,"time_course/masigpro_fit_p.vector_D2456.RDS")
+```
+
+> fit$i # returns the number of significant genes
+> fit$alfa # gives p-value at the Q false discovery control level
+> fit$SELEC # is a matrix with the significant genes and their expression values
+
+T.fit() executes stepwise regression. The step.method can be ”backward” or ”forward” indicating whether the step procedure starts from the model with all or none variables.
+
+For each selected gene the following values are given:
+
+   * p-value of the regression ANOVA
+   * R-squared of the model
+   * p-value of the regression coefficients of the selected variables
+
+You can use option ”each” to analyze the type of responses present in the significant genes: 
+
+  * significant genes at the ”intercept” term will have a significant expression value at the starting time (beta0)
+  * genes associated to the variable ”Time” will have a significant linear component, which can be induction or repression depending on the sign of their coefficient (betaTime)
+  * genes associated to the variable ”Time2” will show a change in
+the linear response that might be indicating transitory or saturation responses
+
+```{r}
+## This will obtain all sigificant genes regardless the Rsquared value.
+sigs_all <- get.siggenes(tstep,
+                     rsq = 0.6, 
+                     vars = "all",
+                     trat.repl.spots="none")
+
+sigs_all_df <- bind_cols(c(sigs_all$sig.genes[2:4], sigs_all$sig.genes[1]))
+
+dim(sigs_all_df) #293 genes
+length(sigs_all$summary)
+head(sigs_all$summary)
+# quantile(sigs_all_df$`p-value`, na.rm=TRUE)
+```
+
+```{r}
+## This will obtain sigificant genes per experimental group
+sigs_each <- get.siggenes(tstep,
+                     rsq = 0.6, 
+                     vars = "each",
+                     trat.repl.spots="none")
+
+
+dim(sigs_each$summary) #293
+```
+
+Data clustering can be done on the basis of either the original expression values, the regression coefficients, or the t.scores.
+
+```{r fig.height=10, fig.width=10}
+gene_clusters <- see.genes(data = sigs_all$sig.genes,
+          show.fit = FALSE,
+          dis = pf_design$dis,
+          cluster.data = "sig.profiles", 
+          k.mclust = TRUE,
+          cluster.method = "Mclust",
+          show.lines = TRUE)
+
+# gene_clusters$cut
+```
+
+### Expression plots 
+
+```{r}
+expn <- sigs_all$sig.genes$sig.profiles  %>% 
+  rownames_to_column("gene_id") %>% 
+  add_column(cluster=gene_clusters$cut, .before=2) %>% 
+  pivot_longer(cols=matches("Pf"), 
+               names_to="masigpro_id",
+               values_to="log2_CPM") %>%
+  left_join(., design_input, by="masigpro_id") %>% 
+  group_by(cluster) %>% 
+  mutate(label=paste0("cluster", cluster, "\n (", length(unique(gene_id)), " genes)")) %>% 
+  ungroup() %>% 
+  group_by(cluster, analysis_factor_group) %>% 
+  mutate(median_val=median(log2_CPM)) %>% 
+  ungroup() %>% 
+  group_by(cluster, analysis_factor_group, masigpro_id) %>% 
+  mutate(median_val_per_sample=median(log2_CPM)) %>% 
+  ungroup()
+
+head(expn)
+```
+
+
+```{r fig.height=10, fig.width=14}
+# pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_per_cluster.pdf", height = 10, width = 14)
+ggplot(data=expn,
+       aes(x=masigpro_id, y=log2_CPM, color=gene_id)) +
+  geom_point() +
+  geom_line(aes(group=gene_id)) +
+  scale_color_viridis_d(option="D") +
+  guides(color = "none") +
+  theme_classic() +
+  facet_wrap(~label, scales = "free_x") +
+  theme(axis.text.x = element_text(angle=35, vjust=1, hjust=1,color="black"),
+        axis.title.x = element_blank(),
+        plot.margin = margin(l=5, unit="mm"))
+# dev.off()
+```
+
+```{r fig.height=10, fig.width=14}
+pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_boxplot.pdf", height = 10, width = 14)
+
+ggplot(data=expn,
+       aes(x=analysis_factor_group, y=log2_CPM, fill=analysis_factor_group)) +
+  geom_point(aes(color=analysis_factor_group),
+             position = position_jitterdodge(jitter.width = 2),
+             alpha=0.25) +
+  geom_boxplot(outlier.color = NA, alpha=0.3, color="grey70") +
+  geom_line(aes(x=analysis_factor_group, y=median_val, group=cluster), 
+            size=1.5, color="black", alpha=0.75,
+            linetype="solid") +
+  scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+  scale_fill_viridis_d(option="D") +
+  theme_classic() +
+  facet_wrap(~label, scales = "free_x") +
+  theme(axis.text.x = element_text(angle=35, vjust=1, hjust=1,color="black"),
+        axis.title.x = element_blank(),
+        plot.margin = margin(l=5, unit="mm"))
+dev.off()
+```
+
+```{r fig.height=10, fig.width=14}
+pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_median_dotplot.pdf", height = 10, width = 14)
+
+ggplot(data=expn,
+       aes(x=analysis_factor_group, y=median_val_per_sample, 
+           color=analysis_factor_group)) +
+  geom_line(aes(x=analysis_factor_group, y=median_val, group=cluster),
+            size=1, color="red", alpha=0.75,
+            linetype="longdash") +
+  geom_point(size=3, alpha=0.5) +
+  scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+  scale_fill_viridis_d(option="D") +
+  theme_classic() +
+  facet_wrap(~label, scales = "free_x") +
+  theme(axis.text.x = element_text(angle=35, vjust=1, hjust=1,color="black"),
+        axis.title.x = element_blank(),
+        plot.margin = margin(l=5, unit="mm"))
+
+dev.off()
+```
+
+```{r fig.height=20, fig.width=12}
+ordered_genes <- gene_clusters$cut[order(gene_clusters$cut)]
+idx <- which(!duplicated(ordered_genes, fromLast=TRUE))
+quickPheatmap(expn = sigs_all$sig.genes$sig.profiles[names(ordered_genes),], 
+              sample_data = design_input[,c("analysis_factor_group","infection_status")],
+              gene_index=idx)
+```
+
+
+```{r}
+hmap_time_course <- create_pf_heatmaps(TMMCPM = sigs_all$sig.genes$sig.profiles[names(ordered_genes),],
+                   sample_annots = design_input,
+                   gene_annots = fData(cb_eset),
+                   genelist = names(ordered_genes),
+                   split=ordered_genes)
+```
+
+```{r fig.height=10, fig.width=12}
+hmap_time_course$heatmap
+```
+
+```{r}
+sample_order <- sigs_all$sig.genes$sig.profiles %>% 
+  dplyr::select(Pf_Day0_Rep1:Pf_Day0_Rep4, 
+                Pf_Day2_Rep1:Pf_Day2_Rep3, 
+                Pf_Day4_Rep1,Pf_Day4_Rep3,Pf_Day4_Rep2, 
+                matches("Pf_Day[56]"))  %>% 
+  colnames()
+
+sample_order
+
+```
+
+```{r}
+plot(hmap_time_course$dends$samp.c1)
+```
+
+
+## Day 456
+
+```{r}
+input_d456 <- dplyr::select(design_input,Time:Group) %>% 
+  dplyr::filter(Time != 2)
+
+pf_design_d456 <- make.design.matrix(input_d456,
+                                degree = 2)
+```
+
+```{r eval=FALSE}
+fit_d456  <- p.vector(expression[,rownames(input_d456)], 
+                      pf_design_d456,
+                      counts=TRUE,
+                      Q = 0.05,
+                      MT.adjust = "BH",
+                      min.obs = 5)
+
+
+tstep_d456  <- T.fit(fit_d456, step.method = "backward")
+
+
+# saveRDS(fit_d456,"time_course/masigpro_fit_p.vector_degree2_D456.RDS")
+# saveRDS(tstep_d456,"time_course/masigpro_tstep_degree2_D456.RDS")
+```
+
+"Influence: 85 genes with influential data at slot influ.info. Model validation for these genes is recommended"
+
+```{r}
+tstep_d456 <- readRDS("time_course/masigpro/masigpro_tstep_degree2_D456.RDS")
+
+## This will obtain all sigificant genes regardless the Rsquared value.
+sigs_all_d456 <- get.siggenes(tstep_d456,
+                     rsq = 0.6, 
+                     vars = "all",
+                     trat.repl.spots="none")
+
+sigs_all_d456$sig.genes$sig.pvalues
+# sigs_all_d456$sig.genes$Time$coefficients
+# sigs_all_d456$sig.genes$Time2$coefficients
+# sigs_all_d456$sig.genes$independ$coefficients
+```
+
+You can use option ”each” to analyze the type
+of responses present in the significant genes: significant genes at the ”intercept” term will have
+a significant expression value at the starting time; genes associated to the variable ”Time”
+will have a significant linear component, which can be induction or repression depending on
+the sign of their coefficient; genes associated to the variable ”Time2” will show a change in
+the linear response that might be indicating transitory or saturation reponses,
+
+
+```{r fig.width=10, fig.height=10}
+gene_clusters_d456 <- see.genes(data = sigs_all_d456$sig.genes,
+          dis = pf_design_d456$dis,
+          cluster.data = "sig.profiles", 
+          k.mclust = TRUE,
+          cluster.method = "Mclust",
+          show.fit = TRUE,
+          show.lines = TRUE)
+
+ordered_genes <- gene_clusters_d456$cut[order(gene_clusters_d456$cut)]
+# str(gene_clusters_d456)
+```
+
+```{r}
+# identical(names(gene_clusters_d456$cut),sigs_all_d456$summary)
+
+sigs_all_df_d456 <- bind_cols(c(sigs_all_d456$sig.genes[c(2,4)], 
+                                sigs_all_d456$sig.genes[1])) %>% 
+  mutate(gene_cluster=gene_clusters_d456$cut) %>% 
+  dplyr::select(gene_cluster, everything())
+
+
+dim(sigs_all_df_d456) 
+head(sigs_all_df_d456)
+# write.csv(sigs_all_df_d456, "time_course/masigpro_significant_genes_degree2_d456_results.csv", row.names = TRUE)
+```
+
+```{r}
+expn_d456 <- sigs_all_d456$sig.genes$sig.profiles  %>% 
+  rownames_to_column("gene_id") %>% 
+  add_column(cluster=gene_clusters_d456$cut, .before=2) %>% 
+  pivot_longer(cols=matches("Pf"), 
+               names_to="masigpro_id",
+               values_to="log2_CPM") %>%
+  left_join(., design_input, by="masigpro_id") %>% 
+  group_by(cluster) %>% 
+  mutate(label=paste0("cluster", cluster, "\n (", length(unique(gene_id)), " genes)")) %>% 
+  ungroup() %>% 
+  group_by(cluster, analysis_factor_group) %>% 
+  mutate(median_val=median(log2_CPM)) %>% 
+  ungroup() %>% 
+  group_by(cluster, analysis_factor_group, masigpro_id) %>% 
+  mutate(median_val_per_sample=median(log2_CPM)) %>% 
+  ungroup()
+
+head(expn_d456)
+```
+
+
+```{r}
+sigs_all_df_d456 %>% 
+  rownames_to_column("gene_id") %>% 
+  dplyr::select(gene_id:betaTime2,matches("R|p.valor")) %>% 
+  dplyr::filter(is.na(p.valor_Time)) %>% 
+  arrange(desc(betaTime2))
+```
+
+```{r fig.height=4, fig.width=12}
+temp <- expn_d456 %>% 
+  dplyr::filter(grepl("PF3D7_1413600", gene_id)) %>% 
+  group_by(analysis_factor_group) %>% 
+  mutate(mean_expn=mean(log2_CPM)) %>% 
+  ungroup()
+
+p1 <- ggplot(temp, aes(x=Time,y=log2_CPM, color=analysis_factor_group)) +
+  geom_point() +
+    geom_line(aes(x=Time, y=mean_expn, group=gene_id))  +
+  theme_classic()
+
+p2 <- ggplot(temp, aes(x=Time^2,y=log2_CPM, color=analysis_factor_group)) +
+  geom_point() +
+  geom_line(aes(x=Time^2, y=mean_expn, group=gene_id)) +
+  theme_classic()
+
+p1 + p2
+```
+
+```{r fig.height=10, fig.width=10}
+# pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_per_cluster_d456.pdf", height = 10, width = 14)
+ggplot(data=expn_d456,
+       aes(x=masigpro_id, y=log2_CPM, color=gene_id)) +
+  geom_point() +
+  geom_line(aes(group=gene_id)) +
+  scale_color_viridis_d(option="D") +
+  guides(color = "none") +
+  theme_classic() +
+  facet_wrap(~label, scales = "free_x") +
+  theme(axis.text.x = element_text(angle=35, vjust=1, hjust=1,color="black"),
+        axis.title.x = element_blank(),
+        plot.margin = margin(l=5, unit="mm"))
+# dev.off()
+```
+
+```{r fig.height=7, fig.width=10}
+# pdf("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_expression_boxplot_d456.pdf", height = 10, width = 14)
+
+ggplot(data=expn_d456,
+       aes(x=analysis_factor_group, y=log2_CPM, fill=analysis_factor_group)) +
+  geom_point(aes(color=analysis_factor_group),
+             position = position_jitterdodge(jitter.width = 2),
+             alpha=0.25) +
+  geom_boxplot(outlier.color = NA, alpha=0.3, color="grey70") +
+  geom_line(aes(x=analysis_factor_group, y=median_val, group=cluster), 
+            size=1.5, color="black", alpha=0.75,
+            linetype="solid") +
+  scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+  scale_fill_viridis_d(option="D") +
+  theme_classic() +
+  facet_wrap(~label, scales = "free_x") +
+  theme(axis.text.x = element_text(angle=35, vjust=1, hjust=1,color="black"),
+        axis.title.x = element_blank(),
+        plot.margin = margin(l=5, unit="mm"))
+# dev.off()
+```
+
+```{r fig.height=10, fig.width=14}
+# pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_median_dotplot_d456.pdf", height = 10, width = 14)
+
+ggplot(data=expn_d456,
+       aes(x=analysis_factor_group, y=median_val_per_sample, 
+           color=analysis_factor_group)) +
+  geom_line(aes(x=analysis_factor_group, y=median_val, group=cluster),
+            size=1, color="red", alpha=0.75,
+            linetype="longdash") +
+  geom_point(size=3, alpha=0.5) +
+  scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+  scale_fill_viridis_d(option="D") +
+  theme_classic() +
+  facet_wrap(~label, scales = "free_x") +
+  theme(axis.text.x = element_text(angle=35, vjust=1, hjust=1,color="black"),
+        axis.title.x = element_blank(),
+        plot.margin = margin(l=5, unit="mm"))
+
+# dev.off()
+```
+
+```{r fig.height=20, fig.width=12}
+idx <- which(!duplicated(ordered_genes, fromLast=TRUE))
+# quickPheatmap(expn = sigs_all_d456$sig.genes$sig.profiles[names(ordered_genes),], 
+#               sample_data = design_input[,c("analysis_factor_group","infection_status")],
+#               gene_index=idx)
+```
+
+```{r}
+gene_clust_df <- ordered_genes %>% 
+  as.data.frame() %>% 
+  rename_all(~c("cluster")) %>% 
+  mutate(cluster=as.factor(cluster))
+
+row_ha <- rowAnnotation(df = gene_clust_df, 
+                        col = list(cluster=ggpubr::get_palette("jco", 9) %>% 
+                                     set_names(levels(gene_clust_df$cluster))))
+
+expn_mat <- sigs_all_d456$sig.genes$sig.profiles[names(ordered_genes),]
+
+hmap_time_course <- 
+  create_pf_heatmaps(TMMCPM = expn_mat,
+                     sample_annots = design_input,
+                     gene_annots = rowData(cb_se),
+                     genelist = names(ordered_genes),
+                     split = gene_clust_df)
+```
+
+
+```{r fig.height=10, fig.width=7}
+# pdf("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_heatmap_d456.pdf",
+#     height = 10, width = 10)
+hmap_time_course$heatmap + row_ha
+# dev.off()
+```
+
+```{r}
+# plot(hmap_time_course$dends$samp.c1)
+ 
+sample_order <- sigs_all_d456$sig.genes$sig.profiles %>% 
+  dplyr::select(Pf_Day0_Rep1:Pf_Day0_Rep5, 
+                
+                Pf_Day6_Rep1, Pf_Day6_Rep2, Pf_Day6_Rep3, 
+                
+                Pf_Day5_Rep2,Pf_Day5_Rep3,Pf_Day5_Rep1,
+                
+                Pf_Day4_Rep2,Pf_Day4_Rep1,Pf_Day4_Rep3)  %>% 
+  colnames()
+
+# sample_order
+
+hmap_time_course2 <- 
+  create_pf_heatmaps(TMMCPM = expn_mat,
+                     order_ids = sample_order,
+                     sample_annots = design_input,
+                     gene_annots = rowData(cb_se),
+                     genelist = names(ordered_genes),
+                     split = gene_clust_df)
+```
+
+```{r fig.height=10, fig.width=7}
+# pdf("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_re-order_heatmap_d456.pdf",
+    # height = 10, width = 10)
+hmap_time_course2$heatmap + row_ha
+# dev.off()
+```
+
+
+## Example Data Inputs
+
+```{r}
+data(data.abiotic)
+data(edesign.abiotic)
+View(edesign.abiotic)
+
+design <- make.design.matrix(edesign.abiotic, degree = 2)
+design
+
+quantile(data.abiotic, na.rm=TRUE)
+
+str(design)
+# design$groups.vector
+
+#For a single series time course
+Time <- rep(c(1,5,10,24), each = 3)
+Replicates <- rep(c(1:4), each = 3)
+Group <- rep(1,12)
+ss.edesign <- cbind(Time,Replicates,Group)
+rownames(ss.edesign) <- paste("Array", c(1:12), sep = "")
+# ss.edesign
+```
+
+```{r}
+data(NBdata)
+quantile(NBdata)
+ data(NBdesign)
+ 
+View(NBdesign)
+```
+
+```{r}
+IDs <- rbind(paste("feature", c(1:300), sep = ""),
+       rep(paste("gene", c(1:150), sep = ""), each = 2))
+
+head(IDs[,1:5])
+# dim(IDs)
+
+
+tc.GENE <- function(n, r,
+             var11 = 0.01, var12 = 0.01,var13 = 0.01,
+             var21 = 0.01, var22 = 0.01, var23 =0.01,
+             var31 = 0.01, var32 = 0.01, var33 = 0.01,
+             var41 = 0.01, var42 = 0.01, var43 = 0.01,
+             a1 = 0, a2 = 0, a3 = 0, a4 = 0,
+             b1 = 0, b2 = 0, b3 = 0, b4 = 0,
+             c1 = 0, c2 = 0, c3 = 0, c4 = 0)
+{
+
+  tc.dat <- NULL
+  for (i in 1:n) {
+    Ctl <- c(rnorm(r, a1, var11), rnorm(r, b1, var12), rnorm(r, c1, var13))  # Ctl group
+    Tr1 <- c(rnorm(r, a2, var21), rnorm(r, b2, var22), rnorm(r, c2, var23))  # Tr1 group
+    Tr2 <- c(rnorm(r, a3, var31), rnorm(r, b3, var32), rnorm(r, c3, var33))  # Tr2 group
+    Tr3 <- c(rnorm(r, a4, var41), rnorm(r, b4, var42), rnorm(r, c4, var43))  # Tr3 group
+    gene <- c(Ctl, Tr1, Tr2, Tr3)
+    tc.dat <- rbind(tc.dat, gene)
+  }
+  tc.dat
+}
+
+# tc.GENE
+
+## Create 270 flat profiles
+flat <- tc.GENE(n = 270, r = 3)
+## Create 10 genes with profile differences between Ctl and Tr1 groups
+twodiff <- tc.GENE (n = 10, r = 3, b2 = 0.5, c2 = 1.3)
+## Create 10 genes with profile differences between Ctl, Tr2, and Tr3 groups
+threediff <- tc.GENE(n = 10, r = 3, b3 = 0.8, c3 = -1, a4 = -0.1, b4 = -0.8, c4 = -1.2)
+## Create 10 genes with profile differences between Ctl and Tr2 and different variance
+vardiff <- tc.GENE(n = 10, r = 3, a3 = 0.7, b3 = 1, c3 = 1.2, var32 = 0.03, var33 = 0.03)
+## Create dataset
+tc.DATA <- rbind(flat, twodiff, threediff, vardiff)
+rownames(tc.DATA) <- paste("feature", c(1:300), sep = "")
+colnames(tc.DATA) <- paste("Array", c(1:36), sep = "")
+tc.DATA [sample(c(1:(300*36)), 300)] <- NA  # introduce missing values
+
+
+# head(tc.DATA[,1:10])
+# head(IDs[,1:10])
+```
+
+# Motif Analysis
+
+https://bioconductor.org/packages/release/bioc/vignettes/universalmotif/inst/doc/MotifManipulation.pdf
+
+https://journals.plos.org/plospathogens/article?id=10.1371/journal.ppat.1001165#s5
+
+https://rdrr.io/github/robertamezquita/marge/man/write_homer_motif.html
+
+http://homer.ucsd.edu/homer/motif/creatingCustomMotifs.html
+
+
+```{r message=FALSE}
+library(monaLisa)
+library(JASPAR2020)
+library(TFBSTools)
+library(MotifDb)
+library(universalmotif)
+```
+
+https://en.wikipedia.org/wiki/Position_weight_matrix
+
+A PWM has one row for each symbol of the alphabet (4 rows for nucleotides in DNA sequences or 20 rows for amino acids in protein sequences) and one column for each position in the pattern. In the first step in constructing a PWM, a basic position frequency matrix (PFM) is created by counting the occurrences of each nucleotide at each position. From the PFM, a position probability matrix (PPM) can now be created by dividing that former nucleotide count at each position by the number of sequences, thereby normalising the values. Formally, given a set X of N aligned sequences of length l, the elements of the PPM M are calculated:
+
+## Homer Command line 
+
+```{r eval=FALSE}
+# Prepare data for HOMER
+Day2 <- read.csv("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv", comment.char = "#")
+
+dir.create("homer/day2/up",recursive = T,showWarnings = FALSE)
+dir.create("homer/day2/down",recursive = T, showWarnings = FALSE)
+
+
+Day2 %>%
+  dplyr::filter(logFC > 0) %>%
+  write.table(.,"homer/day2/up/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
+              sep="\t", quote=FALSE, row.names = FALSE)
+
+Day2 %>%
+  dplyr::filter(logFC < 0) %>%
+  write.table(.,"homer/day2/down/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
+              sep="\t", quote=FALSE, row.names = FALSE)
+
+sigs_all_df_d456 <-  read.csv("time_course/masigpro/masigpro_significant_genes_d456_results.csv") %>% 
+  rename_at(vars(X), ~c("gene_id"))
+
+gene_clusts_dfs <- purrr::map(unique(sigs_all_df_d456$gene_cluster), function(clust){
+  out <- here::here(file.path("homer",paste0("cluster",clust)))
+  dir.create(out,recursive = T, showWarnings = FALSE)
+  
+  sigs_all_df_d456 %>%
+    dplyr::filter(gene_cluster==clust) %>% 
+    write.table(., file.path(out,
+                             paste0("Heps_Pf_vs_sporozorite_combat-seq_corrected_masigpro_cluster",clust, ".csv")),
+                sep="\t", quote=FALSE, row.names = FALSE)
+})
+
+# gene_clusts_dfs
+```
+
+```{bash}
+
+cd motif_analysis/homer/
+./create_db.sh
+for file in $(find . -name ".csv")
+do
+  # NOTE: when trying to submit to HPC using qsub I was getting an error due not finding the Homer depencecies or something. So just ran locally. 
+  ./homer_motif_analysis.pbs $file
+done
+```
+
+## AP2 Motif Set 
+
+
+*PWMs:*
+- PWM scores are defined as the log-ratio of the PPM and the background frequencies:
+- the position weight matrix (PWM), which uses the PPM and a background model to get an idea of “expected” sequences, and thereby can assign weights to each letter at each position. 
+- “Background” refers here to the base composition at non-specific sites (i.e. here, sequences that do not necessarily bind the TF).
+- The background is often assumed to be either uniform (i.e. 1/4 for each of A, T, C, and G), or to be the genome-wide nucleotide frequencies. PWM scores are defined as the log-ratio of the PPM and the background frequencies
+
+*ICMs*
+
+- highlight conserved over non-conserved sites.
+- The information content matrix (ICM) is a scaled version of the PPM, where each position gets scaled by its information content (IC) measured in bits.
+- Most conserved sites have an IC of 2 bits.
+- This form can be visualised as a “sequence logo”, 
+
+
+  - Reference: https://ivanek.github.io/analysisOfGenomicsDataWithR/13_Motifs_html.html
+  - https://bioconductor.org/packages/devel/bioc/vignettes/monaLisa/inst/doc/monaLisa.html
+
+See: matchPWM()
+https://rdrr.io/github/Bioconductor/Biostrings/man/matchPWM.html
+https://stat.ethz.ch/pipermail/bioconductor/2008-April/022029.html
+
+MotifDB
+https://bioconductor.org/packages/3.15/bioc/html/MotifDb.html
+
+### Supplemental Data
+
+Dataset S1.  Position weight matrices for all AP2 domains that bound DNA in PBM experiments.
+The data is from protein-binding microarray experiments performed using purified, GST-tagged AP2 domains.
+The "Seed-and-Wobble" algorithm was applied to combine the data from two separate experiments and create position weight matrices (PWMs) (Berger et al. 2006).
+
+  - An enrichment score cut-off of 0.45 was used to distinguish high affinity binding data from low affinity and non-specific binding.
+
+  - Each column in the matrices represent the nucleotide position from 5' to 3'.
+  - Reference: doi:10.1371/journal.ppat.1001165
+  
+```{bash, eval=FALSE}
+cd references/AP2_motifs/
+TFs=$(cat ppat.1001165.s019.csv | grep -E "^PF" | tr -d "," )
+for tf in $(echo "$TFs"); do grep -E -A 4 "$tf" ppat.1001165.s019.csv | grep -v $tf >${tf}.csv  ; done
+```
+
+```{r}
+tf_dfs <- dir("references/AP2_motifs", pattern = "^P", full.names = TRUE)
+# tf_dfs
+
+AP2_PWMlist <- TFBSTools::PWMatrixList()
+for(df in tf_dfs){
+  motif_name <- str_split_fixed(df, pattern="/", n=3)[,3] %>% 
+    gsub(".csv","", .)
+  pwm <- read.delim(df, sep=",", header=FALSE,row.names = 1)
+  rownames(pwm) <- gsub(":","",rownames(pwm))
+  pwm <- pwm[,!sapply(pwm, function(x) any(is.na(x)))] 
+  pwm <- TFBSTools::as.matrix(pwm)
+
+  pwm_mat <- PWMatrix(ID=motif_name,
+                      name=motif_name,
+                      strand = "*",
+                      profileMatrix = pwm)
+  AP2_PWMlist[[motif_name]] <- pwm_mat
+}
+names(AP2_PWMlist) <- str_split_fixed(tf_dfs, pattern="/", n=3)[,3] %>%  gsub(".csv","", .)
+
+AP2_PWMlist
+```
+
+```{r}
+# VERY Similar to the Motifs on the PlasmoDB, though PlasmoDB lacks a y-axis
+# view_motifs(AP2_PWMlist$PF07_0126_DLD,
+#             use.type='PWM')
+# view_motifs(AP2_PWMlist$PF11_0404_D1, use.type = 'PWM')
+```
+
+```{r}
+# lapply(AP2_PWMlist,view_motifs, use.type='PWM')
+```
+
+### AP2 MotifDB
+
+MotifDB:
+ - More than 9900 annotated position frequency matrices (PFM) from 14 public sources, for multiple organisms.
+
+```{r}
+# can't get this to be a correct df without substantial cleaning, so NVM
+# was going to use the motif counts to convert the PFMs to PWMs (the n=XXX paramater)
+AP2_table_S2 <- tabulizer::extract_tables("references/AP2_motifs/AP2_TF_motif_counts.pdf",
+                                           output="character")
+
+# AP2_table_S2
+```
+
+```{r}
+#The MotifDb query function performs a broad, case-neutral text search through all the metadata (all the annotation) for all of the motifs. It returns a list of matching motifs. More information about the metadata is provided below.
+pf_motifs <- query(MotifDb, andStrings=(c("AP2","Pfalciparum")))
+pf_motif_meta <- pf_motifs@elementMetadata
+head(pf_motif_meta)
+
+# PMID: 21060817 is the same data from the supplemental files from  Campbell et al,..,.Manuel Llinás, 2010
+table(pf_motif_meta$geneSymbol)
+table(pf_motif_meta$pubmedID)
+table(pf_motif_meta$tfFamily) #AP2 and 2 NAs
+
+#PFM position frequency matrix
+pf_motifs@listData %>% head(.,n=2)
+```
+
+```{r}
+# See also: convert_type(motif, type="PPM")
+# this assumes a count of n=100 sequences, and I'm not sure if that is introducing too much bias
+#could potentially use the data in the pdf supplemental table
+ap2_res <- convert_motifs(pf_motifs, class="TFBSTools-PWMatrix")
+names(ap2_res) <- names(pf_motifs@listData)
+head(ap2_res)
+
+# view_motifs(ap2_res[1:3], dedup.names = TRUE)
+# class(ap2_res[[1]])
+```
+
+
+## AP2 monaLisa
+
+```{r}
+edb <- ensembldb::EnsDb("species_genomes/GRCh38_GRCm39_Pf3D7v58.sqlite")
+# edb
+
+genome <- Biostrings::readDNAStringSet("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_Genome.fasta")
+
+cleaned_levs <- seqlevels(genome) %>%
+  str_split_fixed(.,"\\|", n=2) %>% 
+  .[,1] %>% 
+  gsub("\\s", "",.)
+
+names(genome) <- cleaned_levs
+
+head(genome)
+```
+
+```{r}
+#subset the promoters for those -1000bp upstream to TSS and those in plasmodium 
+promoters_gr <- promoters(edb, upstream=1000, downstream = 0)
+pf_proms_gr <- promoters_gr[promoters_gr$gene_id %in% rowData(cb_se)[["gene_id"]]]
+```
+
+```{r}
+#ensure same seqlevels and seqlengths are present
+seqlevels(pf_proms_gr) <- names(genome)
+seqlengths(pf_proms_gr) <- width(genome)
+pf_proms_gr <- trim(pf_proms_gr) #some ranges are outside the expected lengths of Pf3D7_MIT_v3
+
+
+pf_proms_gr
+```
+
+
+calcBinnedMotifEnrR:
+
+Motif enrichments are then calculated for each bin, normalizing for differences in sequence composition in a very similar way as originally done by Homer (Heinz et al. 2010).
+
+We recommend using this function to do the binned motif enrichment analysis, since it corrects for sequence composition differences similarly to Homer, but is implemented more efficiently.
+
+ we would recommend to use regions of similar or even equal lengths to avoid a length bias, for example by using a fixed-size region around the midpoint of each region of interest. 
+
+GC-Bias:
+GC-poorer than in other bins. A strong bias of this kind could give rise to false positives in that bin, e.g. enrichments of AT-rich motifs.
+bias *may* be ignored because the built-in sequence composition correction, but check of AT rich motifs. 
+
+
+```{r}
+day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
+                      sep=",",comment.char = "#")
+head(day2_de)
+# dim(day2_de) #1978   20
+
+time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
+  rename_at(vars(X), ~c("gene_id")) %>% 
+  arrange(gene_cluster)
+# head(time_course)
+
+gene_clusts_dfs <- purrr::map(unique(time_course$gene_cluster), function(clust){
+  time_course %>%
+    dplyr::filter(gene_cluster==clust) 
+})
+names(gene_clusts_dfs) <- paste0("cluster", unique(time_course$gene_cluster))
+# sapply(gene_clusts_dfs, dim)
+# head(gene_clusts_dfs$cluster1)
+# lapply(gene_clusts_dfs, function(x) quantile(x$betaTime))
+```
+
+Generally speaking, we recommend a minimum of ~100 sequences per bin as fewer sequences may lead to small motif counts and thus either small or unstable enrichments. 
+
+So for the time course clusters, I'll keep them all as 1 bin
+
+
+```{r}
+motif_enrichment_workflow <- function(targets_df, proms_gr, genome_bs, 
+                                      region_length=1000,
+                                      col_to_bin="logFC"){
+  # targets_df is a dataframe with gene_ids and column of numeric values for enrichement (ex, logFC)
+  # 
+  
+    proms <- proms_gr[proms_gr$gene_id %in% targets_df$gene_id]
+    genes_removed <-  width(proms) %>%  table
+    proms <- proms[!width(proms) < region_length]
+    
+    #retrienve the DNA seqs for the promoter regions of interest
+    target_seqs <- Biostrings::getSeq(genome, proms)
+
+    # Re-order each gene's enrichment value to its matching transcript promoter region
+    enr_values <- proms %>% 
+      as.data.frame() %>% 
+      #ensure correct order and account for genes with > 1 transcript ID
+      left_join(., dplyr::select(targets_df, gene_id, all_of(col_to_bin)),
+                by="gene_id") %>% 
+      pull(all_of(col_to_bin))
+    
+    #Add the value to the metadata of the gr object 
+    mcols(proms)[[col_to_bin]] <- enr_values
+    
+    #Bin the numeric values
+    if( col_to_bin == "betaTime" ){
+      input_bins <- enr_values %>%
+        bin(.,
+            binmode = "equalWidth",
+            nBins = 1)
+    
+    }else {
+      min_val <- min(enr_values)
+      max_val <- max(enr_values)
+      input_bins <- enr_values %>%
+        bin(.,
+            binmode = "breaks",
+            breaks = c(min_val,0,max_val), #compare up and down-regulated genes separately.
+            nBins = 2)
+    }
+
+
+    # Binned Motif Enrichment
+    set.seed(20221012)
+    enr_res <- calcBinnedMotifEnrR(seqs = target_seqs,
+                                    bins = input_bins,
+                                    pwmL = AP2_PWMlist,
+                                    # background = "otherBins",
+                                    test = "binomial",
+                                    background = "genome",
+                                    genome = genome_bs,
+                                    genome.regions = proms_gr,
+                                    genome.oversample = 10.0,
+                                    BPPARAM = BiocParallel::MulticoreParam(4),
+                                    verbose = TRUE)
+
+    results <- list("genes_removed"=genes_removed,
+                    "target_promoters"=proms,
+                    "target_seqs"=target_seqs,
+                    "input_bins"=input_bins,
+                    "enrichement_res"=enr_res)
+    return(results)
+}
+```
+
+```{r}
+save_monaL_plots <- function(monalisa_res, prefix){
+  
+    pdf(paste0(prefix,"_GC_content.pdf"), height=7, width=7)
+    print(plotBinDiagnostics(monalisa_res$target_seqs, monalisa_res$input_bins, aspect="GCfrac"))
+    dev.off()
+    
+    pdf(paste0(prefix,"_bin_distribution.pdf"), height=7, width=7)
+    print(plotBinDensity(mcols(monalisa_res$target_promoters)[[7]], monalisa_res$input_bins, legend = "topleft"))
+    dev.off()
+    
+    
+    maxEnr <- ceiling(max(assay(monalisa_res$enrichement_res, "log2enr"), na.rm=TRUE))
+    maxSig <- ceiling(max(assay(monalisa_res$enrichement_res,"negLog10P"), na.rm = TRUE))
+    
+    pdf(paste0(prefix,"_log2Enr_p.value_heatmap.pdf"), height = 10, width = 14)
+    plotMotifHeatmaps(x = monalisa_res$enrichement_res, 
+                      which.plots = c("log2enr", "negLog10P"), 
+                      width = 2.0,
+                      cluster = TRUE,
+                      maxEnr = maxEnr, 
+                      maxSig = maxSig, 
+                      show_motif_GC = TRUE)
+    dev.off()
+}
+```
+
+
+```{r}
+day2_enr <- motif_enrichment_workflow(targets_df = day2_de, 
+                                      proms_gr = pf_proms_gr, 
+                                      genome_bs = genome,
+                                      col_to_bin = "logFC")
+
+# saveRDS(day2_enr, "motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
+```
+```{r}
+assays(day2_enr$enrichement_res)
+d2p <- save_monaL_plots(day2_enr, prefix = "figures/motif_analysis/Day2_vs_SPZ")
+```
+
+A negLog10 P or FDR > 1.3 will ~= 0.050118
+A negLog10 P or FDR > 4.0 will ~= 0.0001
+
+
+```{r}
+cluster_motifs <- lapply(gene_clusts_dfs, 
+                         motif_enrichment_workflow,
+                         col_to_bin = "betaTime",
+                         proms_gr = pf_proms_gr, 
+                         genome_bs = genome)
+
+names(cluster_motifs) <- names(gene_clusts_dfs)
+```
+
+```{r}
+# cluster_motifs$cluster1$input_bins
+# assay(cluster_motifs$cluster1$enrichement_res, "negLog10Padj")
+```
+
+```{r}
+tcp <- lapply(names(cluster_motifs),function(x) save_monaL_plots(cluster_motifs[[x]],prefix = x))
+```
+
+## JASPAR directly 
+
+```{r}
+dumpJaspar(filename = "homer/jaspar2020.motif",
+  pkg = "JASPAR2020",
+  opts = list(tax_group = c("vertebrates", "insects", "urochordat", "nematodes", "fungi"),
+              collection = c("CORE")),
+  pseudocount = 1,
+  relScoreCutoff = 0.8,
+  verbose = FALSE
+)
+```
+
+```{bash eval=FALSE}
+#https://pathcards.genecards.org/card/transcriptional_regulation_by_the_ap-2_(tfap2)_family_of_transcription_factors
+AP2_Genes=(TFAP2A TFAP2C TFAP2B TFAP2E WWOX TFAP2D CITED2 KCTD1 UBE2I SUMO1 KCTD15 CDKN1A KDM5B CGA CGB3 CREBBP CITED4 EGFR EP300 ERBB2 ESR1 ATAD2 HSPD1 KIT CITED1 MYBL2 MYC NOP2 NPM1 PITX2 TGFA VEGFA YY1 YEATS4 CGB5 CGB8 APOE DEK)
+
+for gene in ${AP2_Genes[*]}; 
+do  
+  grep -E -A 20 "MA.+:::$gene" jaspar2020.motif;
+done > AP2_family_jaspar2020.motif
+
+
+./homer/create_db.sh
+```
+
+Test `-find` with a known hit using the Homer motifs
+http://homer.ucsd.edu/homer/custom.motifs
+
+```{bash}
+PROJDIR="/active/taylor_s/people/jsmi26/RSC/kappe_s_2022.04_PF_LiverStage/homer"
+FILES=$(find $PROJDIR -type f -name "*.csv")
+for file in $(echo "$FILES")
+do
+  ./homer_motif_analysis.pbs $file 
+done 
+```
+
+# GO Terms
+
+https://plasmodb.org/plasmo/app/search/transcript/GeneByLocusTag
+
+http://current.geneontology.org/products/pages/downloads.html
+
+## ClusterProfiler 
+
+```{r}
+day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
+                      sep=",",comment.char = "#")
+head(day2_de)
+# dim(day2_de) #1978   20
+
+time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
+  rename_at(vars(X), ~c("gene_id")) %>% 
+  arrange(gene_cluster)
+# head(time_course)
+
+gene_clusts_dfs <- purrr::map(unique(time_course$gene_cluster), function(clust){
+  time_course %>%
+    dplyr::filter(gene_cluster==clust) 
+})
+names(gene_clusts_dfs) <- paste0("cluster", unique(time_course$gene_cluster))
+# sapply(gene_clusts_dfs, dim)
+# head(gene_clusts_dfs$cluster1)
+# lapply(gene_clusts_dfs, function(x) quantile(x$betaTime))
+```
+
+```{r}
+library(clusterProfiler)
+```
+
+```{r}
+GO_annots <- read.delim("expression_data/PF3D7_GO_Terms_PlasmoDB_v58.txt", sep="\t") %>% 
+  janitor::clean_names()
+
+head(GO_annots)
+# dim(GO_annots) #37,841    11
+table(GO_annots$ontology)
+```
+
+```{r}
+GO_descriptions <- GO_annots %>% 
+  dplyr::select(go_id, ontology, go_term_name) %>% 
+  distinct() %>% 
+  mutate_at(vars(ontology), ~gsub("\\s", "_", .))
+
+dim(GO_descriptions)
+# any(duplicated(GO_descriptions$go_id))
+```
+
+
+```{r}
+clusterProfiler_bubble_plots <- function(df){
+  
+    input <- df %>% 
+      mutate(neg_log10_FDR=-log10(p.adjust)) %>% 
+      arrange(p.adjust)
+    
+    temp <- input %>% 
+      dplyr::filter(p.adjust < 0.05)
+  
+    if(nrow(temp) == 0){
+      temp <- input 
+    }
+    
+    n <- min(20,nrow(temp))
+    temp <- temp %>%  
+      mutate(ID=factor(ID, levels = rev(ID))) %>% 
+      dplyr::slice(1:n)
+    
+    bubble_plot <- ggplot(temp, aes(x=neg_log10_FDR, y=ID)) +
+      geom_point(aes(size=setSize, fill=ID), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(1,10)) +
+      labs(x="-log10(adj. p-value)", y="") +
+      scale_y_discrete(expand = c(0.05,0)) +
+      theme(panel.grid.major.x = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) +
+      guides(fill="none",
+             # size="none",
+             size=guide_legend(title = "Number of DEGs with GO Term",
+                               size = 1)
+             ) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA))
+
+    # return(bubble_plot)
+    tab <-  ggplot(temp, aes(x = 0, y = ID, label=go_term_name, color=ontology)) +
+        geom_text(size = 3,
+                  hjust = 0,
+                  nudge_x = 0)  +
+        scale_y_discrete(expand = c(0.05,0)) +
+        scale_x_continuous(expand = expansion(mult = c(0,1e2))) +
+        coord_cartesian(clip="off",
+                        xlim=c(0, 500)) +
+        theme_void()
+
+    bubble_plot +
+      tab + 
+      plot_layout(widths = c(1, 2.5), guides='collect') &
+      theme(legend.position='top')
+    
+}
+```
+
+
+```{r}
+d2_gsea_input <- day2_de %>% 
+  pull(logFC, name=gene_id)
+
+day2_go_gsea <- GSEA(gene = d2_gsea_input, 
+                    TERM2GENE = dplyr::select(GO_annots,ID=go_id, gene=gene_id))
+
+day2_go_clean <- day2_go_gsea@result %>% 
+  left_join(., GO_descriptions, by=c("ID"="go_id")) %>% 
+  dplyr::select(ID,ontology:go_term_name, everything())
+
+dim(day2_go_clean)
+head(day2_go_clean)
+
+# write.csv(day2_go_clean, "GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv", row.names = FALSE)
+```
+
+```{r}
+# pdf("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_AllOntology_bubblePlot.pdf")
+clusterProfiler_bubble_plots(day2_go_clean) 
+# dev.off()
+```
+
+```{r}
+purrr::map(unique(day2_go_clean$ontology), function(ont, df){
+  df <- day2_go_clean %>% 
+    filter(ontology==ont)
+  
+  pdf(paste0("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_",ont,"_bubblePlot.pdf"), height = 5, width = 8)
+  print(clusterProfiler_bubble_plots(df))
+  dev.off()
+})
+```
+
+ All values in the stats vector are greater than zero and scoreType is "std", maybe you should switch to scoreType = "pos"
+ 
+```{r}
+cluster_go <- purrr::map(names(gene_clusts_dfs), function(clust){
+  
+  
+  gsea_input <- gene_clusts_dfs[[clust]] %>% 
+    pull(gene_id)
+    # arrange(desc(R.squared)) %>% 
+    # pull(R.squared, name=gene_id)
+  
+  if (all(gsea_input < 0) ){
+    type <- "neg"
+  }else if ( all(gsea_input > 0 )){
+    type <- "pos"
+  }else{
+    type <- "std"
+  }
+  
+  go_enr <- enricher(gene = gsea_input,
+                    TERM2GENE = dplyr::select(GO_annots,ID=go_id, gene=gene_id))
+  
+  go_enr_df <- go_enr@result %>%
+    left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
+    dplyr::select(ID,ontology:go_term_name,setSize=Count,
+           everything())
+
+  res <- list("go_gsea"=go_enr, "go_df"=go_enr_df)
+  return(res)
+})
+
+names(cluster_go) <- names(gene_clusts_dfs)
+```
+
+```{r}
+sapply(cluster_go, function(x) dim(x$go_df))
+# sapply(cluster_go, function(x) table(x$go_df$p.adjust < 0.05))
+```
+
+```{r}
+cluster_go_dfs <- purrr::map_dfr(names(cluster_go), function(x) cluster_go[[x]]$go_df %>% 
+                                   mutate(gene_cluster=x) %>% 
+                                   dplyr::select(gene_cluster, everything()))
+
+head(cluster_go_dfs)
+# table(cluster_go_dfs$gene_cluster)
+
+# write.csv(cluster_go_dfs, "GO_enrichment/time_course_clusters_clusterProfiler_allOntology.csv", row.names = FALSE)
+```
+
+```{r}
+cluster_go_dfs %>% 
+  group_by(gene_cluster) %>% 
+  mutate(FDR_sig_result=p.adjust < 0.05) %>% 
+  group_by(FDR_sig_result, .add=TRUE) %>% 
+  dplyr::count() %>% 
+  # write.csv(.,"GO_enrichment/time_course_clusters_clusterProfiler_SigResults_Summary.csv", row.names = FALSE)
+```
+
+
+```{r}
+purrr::map(names(cluster_go_gsea), function(clust){
+  df <- cluster_go_gsea[[clust]]$go_df %>% 
+          mutate_at(vars(ontology), ~case_when(
+                    .=="N/A" ~ "unknown",
+                    TRUE ~ .))
+  
+  for (ont in unique(df$ontology)){
+    subset <- df %>% 
+      filter(ontology == ont)
+    pdf(paste0("figures/combat_seq/bubble_plots/",clust,"_ClusterProfiler_",ont,"_bubblePlot.pdf"),
+        height = 5, width = 8)
+    print(clusterProfiler_bubble_plots(subset))
+    dev.off()
+  }
+  
+})
+```
+
+
+```{r}
+top_paths <- cluster_go_dfs %>% 
+   mutate(neg_log10_FDR=-log10(p.adjust),
+          neg_log10_P=-log10(pvalue)) %>% 
+  group_by(gene_cluster) %>% 
+  filter(p.adjust < 0.05 | pvalue < 0.05) %>% 
+  arrange(desc(neg_log10_FDR), .by_group = TRUE) %>% 
+  dplyr::slice(1:10) %>% 
+  ungroup() %>% 
+  mutate(ID=factor(ID, levels=unique(ID)),
+         text_color=case_when(
+           ontology=="Cellular_Component" ~ "green4",
+           ontology=="Biological_Process" ~ "tomato2",
+           TRUE ~ "dodgerblue"
+         ))
+
+# dim(top_paths)
+head(top_paths)
+# table(duplicated(top_paths$ID))
+# table(top_paths$text_color)
+```
+
+```{r fig.width=12, fig.height=6}
+ bubble_plot <- ggplot(top_paths, aes(x=neg_log10_P, y=ID)) +
+      geom_point(aes(size=setSize, fill=ID), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(2,10)) +
+      labs(x="-log10(p-value)", y="") +
+      scale_y_discrete(expand = c(0.05,0.05)) +
+      scale_x_discrete(expand = c(0.05,0.05)) +
+  
+      theme(panel.grid.major.x = element_blank(),
+            axis.text.y = element_text(color=top_paths$text_color),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) +
+      guides(fill="none",
+             size=guide_legend(title = "Number of DEGs with GO Term",
+                               size = 1)
+             ) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA))
+
+
+svg("figures/combat_seq/bubble_plots/time_course_facet_plot_allOntology.svg", width = 15, height = 7)
+bubble_plot +
+  facet_wrap(~gene_cluster, scales = 'free', ncol = 5)
+dev.off()
+
+```
+
+
+## PlasmoDB 
+
+```{r}
+Day2 <- read.csv("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv", comment.char = "#")
+
+Day2 %>%
+  dplyr::filter(logFC > 0) %>%
+  pull(gene_id) %>%
+  write.table(.,"GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
+              sep="\t", quote=FALSE, row.names = FALSE)
+
+Day2 %>%
+  dplyr::filter(logFC < 0) %>%
+  pull(gene_id) %>% 
+  write.table(.,"GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
+              sep="\t", quote=FALSE, row.names = FALSE)
+
+sigs_all_df_d456 <-  read.csv("time_course/masigpro/masigpro_significant_genes_d456_results.csv") %>% 
+  rename_at(vars(X), ~c("gene_id"))
+
+gene_clusts_dfs <- purrr::map(unique(sigs_all_df_d456$gene_cluster), function(clust){
+  out <- here::here(file.path("GO_enrichment",paste0("cluster",clust)))
+  dir.create(out,recursive = T, showWarnings = FALSE)
+  
+  sigs_all_df_d456 %>%
+    dplyr::filter(gene_cluster==clust) %>% 
+    pull(gene_id) %>%
+    write.table(., file.path(out,
+                             paste0("Heps_Pf_vs_sporozorite_combat-seq_corrected_masigpro_cluster",clust, ".csv")),
+                sep="\t", quote=FALSE, row.names = FALSE)
+})
+```
+
+https://static-content.veupathdb.org/documents/GO-Enrichment.pdf
+
+```{r}
+# From PLASMODB GO analysis - need to find the GO terms themselves...
+res_path <- dir("GO_enrichment/",
+                recursive = TRUE,
+                pattern = ".tsv",
+                full.names = TRUE)
+res <- purrr::map(res_path, function(x) read.delim(x) %>% 
+                    janitor::clean_names())
+names(res) <- basename(res_path) %>% gsub("hiddenGoEnrichmentResult_|.tsv", "",.)
+lapply(res, head)
+```
+
+```{r}
+# BiocManager::install("org.Pf.plasmo.db", 
+#                      lib=.libPaths()[1])
+#org.Pf.plasmo.db is based on old data that are no longer updated. org.Pf.plasmo.db is deprecated and will be removed from Bioconductor version 3.15.
+# library(org.Pf.plasmo.db)
+# BiocManager::install("malaria.db0", lib=.libPaths()[1])
+```
+
+```{r}
+create_bubble_plots <- function(df){
+  
+    input <- df %>% 
+      mutate(neg_log10_P=-log10(p_value),
+             log2_FC=log2(fold_enrichment+1)) %>% 
+      arrange(benjamini)
+    
+    temp <- input %>% 
+      dplyr::filter(benjamini < 0.05) %>% 
+      mutate(id=factor(id, levels = rev(id)))
+  
+    if(nrow(temp) == 0){
+      temp <- input %>% 
+        mutate(id=factor(id, levels = rev(id)))
+    }
+    
+    n <- min(20,nrow(temp))
+    temp <- temp %>%  
+      dplyr::slice(1:n)
+    
+    bubble_plot <- ggplot(temp, aes(x=neg_log10_P, y=id)) +
+      geom_point(aes(size=result_count, fill=id), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(1,10)) +
+      labs(x="-log10(p-value)", y="") +
+      scale_y_discrete(expand = c(0.05,0)) +
+      theme(panel.grid.major.x = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) +
+      guides(fill="none",
+             # size="none",
+             size=guide_legend(title = "Number of DEGs with GO Term",
+                               size = 1)
+             ) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA))
+
+    # return(bubble_plot)
+    tab <-  ggplot(temp, aes(x = 0, y = id, label=name)) +
+        geom_text(size = 3,
+                  hjust = 0,
+                  nudge_x = 0)  +
+
+        scale_y_discrete(expand = c(0.05,0)) +
+        scale_x_continuous(expand = expansion(mult = c(0,1e2))) +
+        coord_cartesian(clip="off",
+                        xlim=c(0, 500)) +
+        theme_void()
+
+    return(bubble_plot +
+      tab + 
+      plot_layout(widths = c(1, 2.5), guides='collect') &
+      theme(legend.position='top'))
+}
+```
+
+```{r fig.height=5, fid.width=10}
+purrr::map(names(res),function(df_ID){ 
+  svg(paste0("kappe_s_",df_ID,"_bubbleplot.svg"), height = 5, width = 10)
+  print(create_bubble_plots(res[[df_ID]]))
+  dev.off()
+})
+
+
+# tab
+```
+
+$c1
+[1] 20 13
+
+$c2
+[1]  5 13
+
+$C3
+[1] 20 13
+
+$C4
+[1]  0 13
+
+$C5
+[1]  3 13
+
+$C6
+[1]  0 13
+
+$day2_vs_spz_downreg
+[1]  3 13
+
+$day2_vs_spz_upreg
+[1]  0 13
+
+# Share the Data
+
+```{bash}
+destination="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/"
+rsync -av time_course $destination
+rsync -av figures $destination
+rsync -av GO_enrichment $destination
+rsync -av homer $destination
+```
+
+```{r}
+
+```
+
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+

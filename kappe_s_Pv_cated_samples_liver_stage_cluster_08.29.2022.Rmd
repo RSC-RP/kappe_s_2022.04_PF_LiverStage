@@ -1,0 +1,1187 @@
+---
+title: "Clustering Concatenated Bio/Tech Replicates - EDA"
+author: "Jenny L Smith"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Set-up 
+
+```{r set-up}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),
+                      tidy=TRUE,
+                      fig.align='center',
+                      fig.width = 10, fig.height = 10)
+
+options(stringsAsFactors = FALSE, max.print = 100)
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+```
+
+```{r message = FALSE, warning=FALSE}
+library(tidyr)
+library(tibble)
+library(magrittr)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+library(ggpubr)
+library(patchwork)
+
+getwd()
+```
+
+# Define Functions 
+
+```{r}
+#from https://github.com/mikelove/DESeq2/blob/master/R/plots.R
+#Want to return the whole scores matrix so can examine 3d pca plots. 
+plotPCA.DESeq.mod <- function(object, intgroup="condition", ntop=500, returnData=FALSE, PC3=FALSE)
+{
+  library(matrixStats)
+  # calculate the variance for each gene
+  rv <- rowVars(assay(object))
+  
+  # select the ntop genes by variance
+  select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+  
+  # perform a PCA on the data in assay(x) for the selected genes
+  pca <- prcomp(t(assay(object)[select,]))
+  
+  # the contribution to the total variance for each component
+  percentVar <- pca$sdev^2 / sum( pca$sdev^2 )
+  
+  if (!all(intgroup %in% names(colData(object)))) {
+    stop("the argument 'intgroup' should specify columns of colData(dds)")
+  }
+  
+  intgroup.df <- as.data.frame(colData(object)[, intgroup, drop=FALSE])
+  
+  # add the intgroup factors together to create a new grouping factor
+  group <- if (length(intgroup) > 1) {
+    factor(apply( intgroup.df, 1, paste, collapse=":"))
+  } else {
+    colData(object)[[intgroup]]
+  }
+  
+  # assembly the data for the plot - first 10 PCs
+  # d <- data.frame(PC1=pca$x[,1], PC2=pca$x[,2], group=group, intgroup.df, name=colnames(object))
+  n <- min(10, ncol(as.data.frame(pca$x)))
+  d <- data.frame(as.data.frame(pca$x)[,1:n], group=group, intgroup.df, name=colnames(object))
+  
+  if (returnData) {
+    attr(d, "percentVar") <- percentVar[1:n]
+    rot <- pca$rotation[,1:n] #for first 10 PCs
+    dat <- list("scores"=d,"rotation"=rot)
+    return(dat)
+  }
+}
+
+#Updated on 6/9/17 to use variance stabilized transformed data as input (not center scaled log2, like in princomp)
+PCA <- function(expnData,phenovector,
+                title="",round=TRUE,colorCodes=NULL,
+                ntop=500, GOI=NULL){
+  
+  suppressPackageStartupMessages(library(DESeq2))
+  library(ggplot2)
+  #expnData is the raw counts (not normalized) has patient IDs as colnames and genes as rownames. 
+  
+  samples <- intersect(names(phenovector), colnames(expnData))
+  countData <- expnData[,samples]
+  phenovector <- phenovector[samples]
+  colData <- as.data.frame(phenovector)
+  
+  if(round){
+    countData <- round(countData, digits = 0)
+  }
+  
+  #Create as DESeq data set object (dds)
+  dds <- DESeqDataSetFromMatrix(countData = countData,
+                                  colData = colData,
+                                  design = ~ 1)
+  
+  #perform variance stabilized transformation 
+  dds <- dds[ rowSums(counts(dds)) > 10, ]
+  varianceStab <- vst(dds, blind = TRUE)
+  
+  #if given a list of genes of interest
+  if (! is.null(GOI)){
+    GOI <- intersect(GOI, rownames(assay(varianceStab)))
+  }else{
+    GOI <- 1:nrow(varianceStab)
+  }
+  
+  #PCA data frame with the wieghts/loadings and eigen vectors
+  pca.dat <- plotPCA.DESeq.mod(object = varianceStab[GOI,], 
+                               intgroup = "phenovector", 
+                               ntop = ntop,
+                               returnData=TRUE)
+  
+  plots <- lapply(c(2:3), function(pc){
+      percentVar <- attr(pca.dat$scores, which="percentVar")
+      y_var <- paste0("PC",pc)
+      
+      p <- ggplot(data=pca.dat$scores, 
+             aes_string(x="PC1", y=y_var, color="phenovector")) + 
+        geom_point(size=3, alpha=0.75) +
+        xlab(paste0("PC1: ",round(percentVar[1] * 100),"% variance")) +
+        ylab(paste0(y_var,": ",round(percentVar[pc] * 100),"% variance")) +
+        labs(title=title) +
+        theme_classic() +
+        theme(legend.position = "top")
+      if(!is.null(colorCodes)){
+        p <- p + 
+          scale_color_manual(values=colorCodes)
+      }
+      return(p)
+  })
+  
+  #Final Results object
+  res <- list(dds, varianceStab,pca.dat, plots)
+  names(res) <- c("dds", "vst","pca_data","pca_plots")
+  
+  if(is.character(GOI)){
+    res[["GOI"]] <- GOI
+  }
+  
+  return(res)
+}
+```
+
+```{r}
+#changed on 2/14/18, see bottom of Heatmaps_Function.r for the original one used.
+dge_dendrograms <- function(expnData, pheno, method,
+                            genelist=NULL,add.count=1, percent=0.05,
+                            ntop=500,filterTopGenes=FALSE, createDGE=TRUE,log=FALSE){
+  #df with count data, patient IDs are column names and rows are genes.
+  #pheno is a character vector with patient IDs as names, and the status for each in each group (eg pos,neg)
+  #genelist is a character vector with the genes of interest
+  #percent is the % of samples in the input expn matrix that must express a gene at 1 CPM. Filter to remove low count genes.
+  #set log=TRUE if providing a log2 expression dataframe.
+  #filterTopGenes shuold be a logical. If TRUE filter top 1000 most varied genes.
+  suppressPackageStartupMessages(require(edgeR))
+  suppressPackageStartupMessages(library(dendextend))
+  suppressPackageStartupMessages(library(matrixStats))
+
+  expnData <- expnData[, intersect(names(pheno), colnames(expnData))] #ensure correct order, drop rows with nas just in case
+  if(createDGE){
+    dge <- DGEList(counts = expnData)
+    #keep the rows (genes) with at least 1 CPM in a minimum of 2 samples or X% of samples. 
+    keep.dge <- rowSums(cpm(dge) >= 1) >= max(2,(percent*ncol(expnData))) 
+    # subset for those genes with cmp >= 1 per gene in samples
+    dge <- dge[keep.dge,] #
+    dge <- calcNormFactors(dge)
+    TMMCPM <- cpm(dge, normalized.lib.sizes = TRUE,
+                  log = TRUE, prior.count = add.count)
+
+  }else{
+    TMMCPM <- as.matrix(expnData)
+    if(!log){
+      TMMCPM <- log2(expnData+add.count) #log2 transform counts
+    }
+  }
+
+  if(is.null(genelist) & filterTopGenes){
+      # calculate the variance for each gene
+      rv <- rowVars(as.matrix(TMMCPM))
+      # select the ntop genes by variance
+      select <- order(rv, decreasing=TRUE)[seq_len(min(ntop, length(rv)))]
+      #select the top 1000 most varied genes
+      TMMCPM <- TMMCPM[select,]
+  }else if(!is.null(genelist)){
+    TMMCPM <- TMMCPM[which(rownames(TMMCPM) %in% genelist), ] #subset the matrix to genes of interest
+  }
+
+
+  d1 <- dist(t(TMMCPM), method = "euclidean", diag = FALSE,
+             upper = FALSE) #sample distances WITHOUT SCALING
+  d2 <- dist(TMMCPM, method = "euclidean", diag = FALSE,
+             upper = TRUE) #gene distances WITHOUT SCaling
+  samp.c1 <- hclust(d1, method = method, members = NULL) #sample clustering
+  gene.c2 <- hclust(d2, method = method, members = NULL) #gene clustering
+  list <- list(TMMCPM,samp.c1,gene.c2)
+  names(list) <- c("TMMCPM","samp.c1", "gene.c2")
+
+  return(list)
+}
+
+```
+
+```{r}
+create_annots_hmap <- function(expn, pheno_df, cols,
+                               goi=NULL,cc=NULL, 
+                               colorbar.height=5){
+  #expn is the normalized expression values with genes as rownames
+  #gene list a character vector
+  #goi are genes of interest to highlight on the Heatmap. Character vector of gene symbols
+  #cc are color codes in WHICH FORMAT?
+
+  #cols is a character vector of column names
+
+  #Example on how to use the reuslts
+
+  #hmap <- ComplexHmap(XXXX, hmap_anno_obj=res$annoColumn, XXX)
+  # draw(hmap + res$geneLabels, heatmap_legend_side="right", annotation_legend_side="right")
+
+    library(dplyr)
+    suppressPackageStartupMessages(library(ComplexHeatmap))
+
+    #subset the expression matix and the phenotype dataframe
+    anno <- pheno_df %>%
+      filter(rownames(.) %in% colnames(expn)) %>% 
+      rownames_to_column("id") %>% 
+      dplyr::select(id, all_of(cols)) %>%
+      mutate(id = factor(id, levels = colnames(expn))) %>%
+      arrange(id) %>%  #ensure same order as the expn matrix
+      column_to_rownames("id")
+  
+    #if no color codes provided, create one for each column
+    if(is.null(cc)){
+      pals <- c("npg", "aaas", "lancet", "jco", 
+                    "ucscgb", "uchicago", "simpsons",
+                    "rickandmorty")
+      #if there are more columns than color palettes, just repeat the set of available color palettes
+      if(length(ncol(anno)) > length(pals)){
+        pals <- rep(pals,  ceiling(ncol(anno)/length(pals)))
+      }
+      #define unique colors for each column
+      cc <- purrr::map(1:ncol(anno), function(i){
+          grps <- unique(anno[[i]])
+          ggpubr::get_palette(pals[i], k=length(grps)) %>% 
+            magrittr::set_names(grps)
+      })
+      names(cc) <- colnames(anno)
+    }
+    
+    #legend graphical parameters
+    n <- max(sapply(cc, length))
+    nrow <- ifelse(n <= 6, n, 6)
+    ncol=ceiling(n/nrow)
+    params <- list(show_legend=TRUE,
+                  labels_gp= gpar(fontsize=12),
+                  title_gp= gpar(fontsize=16),
+                  nrow = nrow,
+                  ncol=3,
+                  by_row=TRUE)
+    
+    #Create the complex heatmap annotation column
+    annoCol <- suppressWarnings(HeatmapAnnotation(df = dplyr::select(anno, all_of(cols)),
+                                   name="Main Groups",
+                                   col=cc,
+                                   which="column",
+                                   gap=unit(1,"mm"),
+                                   border = T,
+                                   show_annotation_name = TRUE,
+                                   annotation_name_gp=gpar(fontsize=12),
+                                   annotation_name_offset=unit(1,"mm"),
+                                   annotation_name_side="left",
+                                   annotation_height=unit(colorbar.height, "cm"),
+                                   annotation_legend_param = params,
+                                   simple_anno_size_adjust=TRUE))
+    res <- list("annoColumn"=annoCol)
+    if(!is.null(goi)){
+      regex <- paste0("^",goi,"$", collapse = "|")
+      goi.idx <- grep(regex, rownames(expn))
+      labels <- rownames(expn)[goi.idx] #needs to be numeric indexes for complexheatmap
+      #create the row (gene) labels object
+      labs <- rowAnnotation(link = anno_mark(at=goi.idx,
+                                             labels=labels,
+                                             which="row",
+                                             link_width=unit(1, "mm")),
+                            width= unit(1, "mm") + max_text_width(labels),
+                            gp=gpar(fontsize=4))
+
+      res[["geneLabels"]] <-  labs
+    }
+    return(res)
+}
+
+
+
+complex_hmap <- function(mat,
+                        hmap_anno_obj,
+                        hmap_anno_obj_genes=NULL,
+                        name="z-scores",
+                        scale=TRUE,
+                        space.type="sRGB",
+                        color_palette=NULL,
+                        split=NULL, 
+                        cluster.method="ward.D2",
+                        show_sample_ids=FALSE,
+                        dge_dendrograms.res=NULL,
+                        samp_dend_order=NULL){
+  #mat is the normalized, log2 (usually) transformed counts
+  #name is the title
+  #scale is whether to scale by row
+  #color palette is a colorRamp2() object.
+  #threshold is whether to make all z-scores in a certain range.
+  #hmap_anno_obj is from HeatmapAnnotation() function
+  #space.type is for the color/shades on the heatmap. See ?Heatmap for all the choices.
+  #dge_dendrograms.res is the list object output from the dge_dendrograms() function.
+  #samp_dend_order is the numeric vector or character vector of column names from the matrix (mat) or the dge_dengrograms.res$TMMCPM matix, in the desired order.
+
+  suppressPackageStartupMessages(library(ComplexHeatmap))
+  suppressPackageStartupMessages(require(circlize))
+  library(RColorBrewer)
+  suppressPackageStartupMessages(library(dendextend))
+  ht_opt$message = FALSE
+
+  if(is.null(color_palette)){
+    pal <- colorRamp2(c(-4,-2, 0, 2, 4),
+                      c("deepskyblue3", "deepskyblue","white", "red", "red3"),
+                      space=space.type)
+  }else{
+    pal <- color_palette
+  }
+  # col <- colorRampPalette(c("cyan1", "cyan2", "cyan3", "cyan4","azure4","magenta4", "magenta3", "magenta2", "magenta1"))(n=299)
+  #colorRamp2(c(-2, 0, 4), c("deepskyblue","white", "red"), space="RGB") #use for breaks.
+  # colorPal <- colorRampPalette(c("deepskyblue4", "deepskyblue3", "deepskyblue2", "deepskyblue1","white","red1", "red2", "red3", "red4"))(n=299)
+
+  #legend graphical parameters
+  params <-  list(color_bar="continuous",
+       legend_direction="horizontal",
+       title_position="leftcenter",
+       legend_width=unit(5,"cm"),
+       legend_height=unit(5,"cm"),
+       title_gp=gpar(fontsize=10,
+                     fontface="bold"))
+
+
+    if(scale){
+      mat <- t(scale(t(mat))) ##rowwise scaling
+    }
+    print(range(mat))
+  
+    if(!is.null(dge_dendrograms.res)){
+        if(is.null(samp_dend_order)){
+          clust <- dendextend::rotate(as.dendrogram(dge_dendrograms.res$samp.c1),
+                           order=c(ncol(mat):1))
+        }else{
+          clust <- dendextend::rotate(as.dendrogram(dge_dendrograms.res$samp.c1),
+                                  order=samp_dend_order)
+      }
+    }else{
+      clust=TRUE
+    }
+
+    #create the heatmap plot
+    hmap <- Heatmap(mat,
+                    name=name,
+                    col=pal,
+
+                    heatmap_legend_param=params,
+                    row_title="Genes",
+                    row_title_side="left",
+                    row_title_gp=gpar(fontsize=15,
+                                      fontface="bold"),
+                    show_row_names=FALSE,
+                    show_column_names=show_sample_ids,
+                    row_names_gp=gpar(fontsize=3),
+
+                    column_title="Samples",
+                    column_title_side="bottom",
+                    column_title_gp=gpar(fontsize=15,
+                                         fontface="bold"),
+                    column_title_rot=0,
+                    row_dend_width=unit(8,"mm"),
+                    column_dend_height=unit(22.5,"mm"),
+
+                    top_annotation=hmap_anno_obj,
+                    right_annotation = hmap_anno_obj_genes,
+                    split=split,
+
+                    clustering_distance_rows="euclidean",
+                    clustering_method_rows=cluster.method,
+                    clustering_method_columns = cluster.method,
+                    cluster_columns = clust,
+                    column_dend_reorder=FALSE)
+
+  return(hmap)
+}
+```
+
+```{r}
+create_pv_heatmaps <- function(TMMCPM,sample_annots, gene_annots,
+                               center_scale=TRUE,
+                               ntop=1000,order_ids=NULL,
+                               genelist=NULL,
+                               heatmap_colors=NULL){
+  pv_genes <- gene_annots %>% 
+    filter(genome=="PVP01") %>% 
+    pull(gene_id)
+  
+  TMMCPM_all_pf <- TMMCPM[rownames(TMMCPM) %in% pv_genes, ]
+  dends <- dge_dendrograms(expnData = TMMCPM_all_pf, 
+                           pheno = pull(sample_annots, group, name = sample_id), 
+                           method = "ward.D2",
+                           genelist = genelist, 
+                           ntop=ntop,
+                           log=FALSE,
+                           filterTopGenes = TRUE,
+                           createDGE = FALSE)
+  
+  # dim(dends$TMMCPM)
+  hmap_anno_obj <- create_annots_hmap(expn=dends$TMMCPM,
+                                      pheno_df = sample_annots,
+                                      cc=NULL,
+                                      colorbar.height=2,
+                                      cols = c("group"))
+  
+  name <- ifelse(center_scale, "z-scores","log2_CPM")
+  complex_hmap(mat=dends$TMMCPM, 
+               scale=center_scale,
+               name=name,
+               hmap_anno_obj = hmap_anno_obj$annoColumn,
+               dge_dendrograms.res = dends,
+               samp_dend_order=order_ids,
+               color_palette=heatmap_colors,
+               show_sample_ids=TRUE)
+  
+}
+```
+
+```{r}
+#Function for Limma Voom differential expression 
+voom_de <- function(expnData, pheno, 
+                    ref, percent=0.05,
+                    logCPM=FALSE,
+                    trend=FALSE,
+                    GOI=NULL,
+                    eBayesRobust=FALSE,
+                    lmMethod="ls") {
+  # expnData is a matrix or data frame with the raw counts. Patient IDs as colnames, genes as rownames
+  # pheno is a character vector with patient IDs as names, and the status for each in each group(eg pos,neg)
+  #ref is a chacter vector of the reference level for DE. for example  ref="control". 
+  # percent is the fraction (0-1 numberic) of samples to include when setting an expression threshold. eg 5% of 
+  #trend is for using limma trend method with log2 CPMs
+  #normalization is for an extra method of normalization such as quantile if necessary. should be either FALSE or "qt" so far
+  #GOI is a character vector of genes (or numeric vector of row indices) of interest to subset at the end. keeps BH adjuted p-values more accurate. 
+
+  library(limma)
+  library(edgeR)
+  
+  #ensure correct order
+  expnData <- expnData[,match(names(pheno), colnames(expnData))]
+  
+  if (!all(complete.cases(expnData))){
+    message("Names DO NOT match in between phenovector and colnames of expression matrix")
+    return(list(expnData=expnData,pheno=pheno))
+  }
+  
+  #order so that reference is specified 
+  pheno.factor <- as.factor(pheno)
+  pheno.factor <- relevel(pheno.factor, ref=ref)
+  
+  #create the DGE list object
+  dge <- DGEList(counts = expnData, group = pheno.factor)
+  keep.dge <- rowSums(cpm(dge) >= 1) >= max(2,(percent*ncol(dge))) 
+  dge <- dge[keep.dge,] #subset for those genes with cpm >= 1 per gene in samples
+  dge <- calcNormFactors(dge, method = "TMMwsp") # TMM normalization
+  
+  #Create a design matrix and contrasts
+  design <- model.matrix(~0 + pheno.factor,
+                         data=dge$samples)#~0 means no intercept. 
+  colnames(design) <- levels(pheno.factor)
+  #contrast is approx. log2(mean(Mut)) - log2(mean(WT)) per gene. 
+  cont.matrix <- makeContrasts(contrasts = paste(rev(levels(pheno.factor)), collapse = "-"),
+                               levels = design) 
+  
+  if (is.null(GOI)){ 
+    GOI <- 1:nrow(dge)
+  }else{
+    GOI <- intersect(rownames(dge), GOI)
+    print(paste0("Length of GOI: ", length(GOI)))
+  }
+  #Run voom (compute appropriate observation-level weights)
+  voom_transformed <- voom(dge, design, plot = FALSE) 
+  type <- "voom"  #voom transformed counts for sample to sample comparisons.
+  print(type) #to confirm which type of DE is performed, trend or voom
+  
+  #fit the linear model. 
+  print(lmMethod)
+  fit <- lmFit(voom_transformed, design,method=lmMethod)
+  fit <- contrasts.fit(fit, contrasts = cont.matrix)
+  
+  #compute moderated t-statistics using empirical bayes moderation. 
+  fit2 <- eBayes(fit, robust=eBayesRobust)[GOI,]  
+
+  # select differentially expressed genes.
+  DE_table <-topTable(fit2,
+                adjust.method="BH",
+                sort.by="P",
+                number=Inf,
+                p.value=0.05,
+                lfc=1) #abs(logFC) >= 1 for all genes
+  
+  DE_table_all <-topTable(fit2,
+                  adjust.method="BH",
+                  sort.by="P",
+                  number=Inf)
+
+  list <- list(voom_transformed, fit2, DE_table, DE_table_all)
+  names(list) <- c(type,"eBayesFit", "DEGs", "all_genes")
+  return(list)
+}
+```
+
+
+# Data locations
+
+```{bash}
+data_processing_path="/active/taylor_s/people/jsmi26/RSC/kappe_s_2022.04_rnaseq_quant"
+rsync -av $data_processing_path/qc_data .
+rsync -av $data_processing_path/raw_counts .
+rsync -av $data_processing_path/samples .
+```
+
+
+# Sample Info
+
+```{r}
+pvivax_manifest <- read.csv("samples/kappe_s_2022.08_pvivax_erika.pv.hypnozoites_sample_manifest.csv", 
+                            row.names = 1) %>% 
+  mutate_at(vars(sample_id), ~gsub("-","", .)) %>% 
+  set_rownames(.$sample_id)
+
+head(pvivax_manifest)
+```
+
+# Gene Counts 
+
+```{r}
+counts_matrix_cated <- read.csv("raw_counts/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_raw_counts.csv") %>% 
+  rename_at(vars(gene_name), ~c("gene_id")) %>% 
+  rename_all(~gsub("\\.", "", .)) %>% 
+  select(all_of(c("gene_id", pvivax_manifest$sample_id))) %>%
+  set_rownames(.$gene_id)
+
+head(counts_matrix_cated)
+dim(counts_matrix_cated)
+```
+
+```{r}
+mapping_stats <- read.csv("raw_counts/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_counts_stats.csv")  %>% 
+  rename_at(vars(gene_name), ~c("gene_id")) %>% 
+  rename_all(~gsub("\\.", "", .)) %>% 
+  select(all_of(c("gene_id", pvivax_manifest$sample_id))) 
+
+head(mapping_stats)
+dim(mapping_stats)
+```
+
+
+# Genome References
+
+```{r}
+#Gene Refs
+species_genes <- read.csv("species_genomes/PvHsMmu_GRCh38_GRCm39_P01v58_genes_annots.csv") %>% 
+  select(gene_name, gene_id, everything()) %>% 
+  set_rownames(.$gene_id)
+
+head(species_genes)
+```
+
+```{r}
+pf_species_genes <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_annots.csv") %>% 
+  select(gene_name, gene_id, everything()) %>% 
+  set_rownames(.$gene_id)
+```
+
+```{r}
+orthologs <- read.csv("expression_data/PVP01_PF3D7_GenesByOrthologs_Summary.csv") %>% 
+  janitor::clean_names() %>% 
+  filter(!duplicated(gene_id))
+
+head(orthologs)
+dim(orthologs) #4485   10
+```
+
+```{r}
+# species_genes %>% 
+#   filter(genome=="PVP01") %>% 
+#   pull(gene_id) %>% 
+#   write.table(.,"expression_data/PVP01_gene_ids.txt", sep="\t",
+#               row.names = FALSE, col.names = FALSE, quote=FALSE)
+```
+
+```{r}
+# pf_species_genes %>% 
+#   filter(genome=="PF3D7") %>% 
+#   pull(gene_id) %>% 
+#     write.table(.,"expression_data/PF3D7_gene_ids.txt", sep="\t",
+#               row.names = FALSE, col.names = FALSE, quote=FALSE)
+```
+
+# Counts and Normalization 
+
+```{r}
+dge_all <- edgeR::DGEList(counts=counts_matrix_cated[,-1])
+keep <- rowSums(edgeR::cpm(dge_all) > 1) >= 3
+dge_all <- dge_all[keep,]
+
+dge_all <- edgeR::calcNormFactors(dge_all, method="TMMwsp")
+TMMCPM_all <- as.data.frame(edgeR::cpm(dge_all,normalized.lib.sizes = TRUE, log=FALSE))
+
+dim(TMMCPM_all)
+head(TMMCPM_all[,1:5])
+
+# write.csv(rownames_to_column(TMMCPM_all,"gene_name"), "expression_data/kappe_s_PfHsMmu_cated_samples_TMM_CPM.csv", row.names = FALSE)
+```
+
+```{r}
+species_genes %>% 
+  filter(gene_id %in% rownames(TMMCPM_all)) %>% 
+  group_by(genome) %>% 
+  dplyr::count() %>% 
+  ungroup() %>% 
+  bind_cols(as.data.frame(table(species_genes$genome))) %>% 
+  rename_at(vars(Freq), ~c("total_genes_in_genome")) %>% 
+  mutate(Percent=round(n/total_genes_in_genome*100, digits=2))
+```
+
+```{r}
+pv_genes <- species_genes %>% 
+  filter(genome=="PVP01")
+
+pv_counts <- counts_matrix_cated[pv_genes$gene_id,]
+dim(pv_counts)
+pv_dge <- edgeR::DGEList(counts=pv_counts[,-1],
+                         group=pvivax_manifest$group,
+                         remove.zeros=FALSE)
+
+pv_keep <- rowSums(edgeR::cpm(pv_dge) > 1) >= 3
+pv_dge <- pv_dge[pv_keep,]
+pv_dge <- edgeR::calcNormFactors(pv_dge, method="TMMwsp")
+pv_TMMCPM <- as.data.frame(edgeR::cpm(pv_dge, normalized.lib.sizes = TRUE, log=FALSE))
+
+dim(pv_TMMCPM)  #4682    6
+head(pv_TMMCPM[,1:5])
+
+# quantile(as.matrix(pv_TMMCPM))
+# quantile(as.matrix(TMMCPM_all))
+
+#these norm factors WAYY inflated tbh
+# pv_dge$samples %>% 
+#   bind_cols(pvivax_manifest$group)
+
+# write.csv(pv_TMMCPM,"expression_data/kappe_s_PVP01_genes_cated_samples_TMM_CPM.csv")
+```
+
+```{r}
+create_long_format_dfs <- function(species_genes,pvivax_manifest,
+                                   counts_matrix_cated, TMMCPM){
+  CPM_matrix_anno <- species_genes %>% 
+    inner_join(., rownames_to_column(TMMCPM,"gene_id"),
+              by="gene_id") %>% 
+    pivot_longer(cols = all_of(pvivax_manifest$sample_id),
+                 names_to="sample_id",
+                 values_to="TMMCPM") %>% 
+    inner_join(., pvivax_manifest, by="sample_id")
+
+  counts_matrix_cated_anno <- species_genes %>% 
+    inner_join(., counts_matrix_cated,
+              by="gene_id") %>% 
+    pivot_longer(cols = all_of(pvivax_manifest$sample_id),
+                 names_to="sample_id",
+                 values_to="counts") %>% 
+    inner_join(., pvivax_manifest, 
+               by="sample_id")
+  
+  return(list("CPM_anno"=CPM_matrix_anno,
+              "counts_anno"=counts_matrix_cated_anno,
+               "counts"=counts_matrix_cated,
+              "TMMCPM"=TMMCPM))
+}
+```
+
+```{r}
+pv_expression <- create_long_format_dfs(species_genes=species_genes,
+                                        pvivax_manifest=pvivax_manifest,
+                                        counts_matrix_cated=pv_counts, 
+                                        TMMCPM = pv_TMMCPM)
+
+all_genomes_expression <- create_long_format_dfs(species_genes=species_genes,
+                                        pvivax_manifest=pvivax_manifest,
+                                        counts_matrix_cated=counts_matrix_cated, 
+                                        TMMCPM = TMMCPM_all)
+```
+
+
+
+# QC Overview
+
+## Counted Reads vs Total Sequenced Reads 
+
+```{r}
+total_counts <- all_genomes_expression$counts_anno %>% 
+  group_by(sample_id) %>% 
+  summarise(number_reads=sum(counts)) %>% 
+  ungroup() %>% 
+  mutate(statistic="total_mapped_count")
+
+mapping_stats_long <- mapping_stats %>% 
+  pivot_longer(cols = all_of(pvivax_manifest$sample_id), 
+               names_to="sample_id",
+               values_to="number_reads") %>% 
+  rename_at(vars(gene_id), ~c("statistic")) %>% 
+  mutate_at(vars(sample_id), ~gsub("_unstrand.+","", .)) 
+
+mapping_stats_comparison <- mapping_stats_long %>% 
+  bind_rows(., total_counts) %>% 
+  group_by(sample_id) %>% 
+  mutate(total_reads=sum(number_reads)) %>% 
+  mutate(Percent=round(number_reads/total_reads*100, digits=2)) %>% 
+  ungroup() %>% 
+  arrange(sample_id)
+
+head(mapping_stats_comparison)
+# write.csv(mapping_stats_comparison, "expression_data/kappe_s_PfHsMmu_mapping_stats_cated_samples_GRCh38_GRCm39_Pf3D7v58_07.01.2022.csv",
+# row.names = FALSE)
+```
+
+```{r}
+df <- mapping_stats_comparison %>% 
+  filter(grepl("total_mapped_count|N_noFeature", statistic)) %>% 
+  arrange(Percent) %>% 
+  group_by(sample_id) %>% 
+  mutate(max=max(Percent)) %>% 
+  ungroup() %>% 
+  arrange(max) %>% 
+  mutate_at(vars(sample_id), ~factor(., levels=unique(.)))
+
+```
+
+```{r fig.height=5, fig.width=7}
+nofeature_barplot <- ggplot(df, aes(x=sample_id,  y=Percent, fill=statistic)) +
+  geom_bar(stat="identity", position = position_dodge()) +
+  theme_classic() +
+  labs(title="Mapping Stats for Liver Stage  P Vivax Infection Samples") +
+  theme(axis.text.x = element_text(angle=25, vjust=1, hjust=1, size = 7),
+        plot.margin = margin(l=10, unit = "mm")) 
+
+nofeature_barplot
+# ggsave(filename="figures/sample_qc/kappe_s_Pvivax_nofeature_exon_gene_counts_barplot.pdf",
+#        plot = nofeature_barplot,
+#        device = "pdf",
+#        height = 5,
+#        width = 12)
+```
+
+## rRNA 
+
+```{r}
+rseq_rRNA_raw <- read.csv("qc_data/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_rRNA_percent_contamination.csv") %>% 
+  arrange(percent_rRNA) %>% 
+  mutate(sample_id=factor(sample_id, levels=sample_id),
+         total_reads=total_records)
+
+head(rseq_rRNA_raw)
+```
+
+```{r}
+# pdf("figures/sample_qc/pvivax_rRNA_contamination_per_sample.pdf", height = 5, width = 7)
+ggplot(rseq_rRNA_raw, aes(x=sample_id, y=percent_rRNA, fill=total_reads)) +
+  geom_col() +
+  theme_classic() +
+  theme(axis.text.x = element_text(size=10, angle=45, vjust=1, hjust=1),
+        plot.margin = margin(l=15, unit="mm")) 
+
+# dev.off()
+```
+
+
+## Read Distribution
+
+```{r}
+rseqc_readDist <-  read.csv("qc_data/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_read_distribution.csv")
+head(rseqc_readDist)
+```
+
+```{r}
+CDS_counts <- rseqc_readDist %>% 
+  filter(Group=="CDS_Exons") %>% 
+  arrange(percent_assigned_tags) %>% 
+  mutate(sample=factor(sample, levels = sample))
+
+three_prime_UTR_counts <- rseqc_readDist %>% 
+  filter(Group=="3'UTR_Exons") %>% 
+  arrange(percent_assigned_tags) %>% 
+  mutate(sample=factor(sample, levels = sample))
+
+# head(three_prime_UTR_counts)
+```
+
+```{r fig.height=5, fig.width=7}
+# pdf("figures/sample_qc/read_distribtion_mapping_per_sample.pdf", height = 7, width = 15)
+ggplot(rseqc_readDist %>% 
+         filter(!grepl("TSS|ES", Group)) %>% 
+         mutate(sample=factor(sample, levels=CDS_counts$sample)),
+       aes(x=sample, y=percent_assigned_tags, fill=Group)) +
+  geom_col(color=NA) +
+  scale_fill_brewer(palette = "Blues")+
+  theme_classic() +
+  theme(axis.text.x = element_text(size=16, angle=45, vjust=1, hjust=1),
+        plot.margin = margin(l=15, unit="mm"))
+
+# dev.off()
+```
+
+
+```{r fig.height=7, fig.width=15}
+# pdf()
+ggplot(CDS_counts, aes(x=sample, y=percent_assigned_tags, fill=Tags.Kb)) +
+  geom_col() +
+  # annotate(geom="text", y=75, x=5, label="CDS_Exons") +
+  labs(title="CDS_Exons") +
+  theme_classic() +
+  theme(axis.text.x = element_text(size=10, angle=45, vjust=1, hjust=1),
+        plot.margin = margin(l=15, unit="mm"))
+
+ggplot(three_prime_UTR_counts, aes(x=sample, y=percent_assigned_tags, fill=Tags.Kb)) +
+  geom_col() +
+  labs(title="3'UTR_Exons") +
+  theme_classic() +
+  theme(axis.text.x = element_text(size=10, angle=45, vjust=1, hjust=1),
+        plot.margin = margin(l=15, unit="mm")) 
+```
+
+# Expression EDA 
+
+## Boxplots of Expression 
+
+```{r fig.height=4, fig.width=5}
+pos_gex <- pv_expression$CPM_anno %>% 
+  mutate(log2_TMMCPM=log2(TMMCPM+1)) %>% 
+  arrange(group) 
+
+ggplot(pos_gex, aes(x=sample_id, y=log2_TMMCPM)) +
+  geom_boxplot(aes(fill=group)) +
+  theme(axis.text.x = element_text(angle=25, vjust=1, hjust=1))
+```
+
+
+```{r fig.height=6, fig.width=10}
+pos_gex_all <- all_genomes_expression$CPM_anno %>% 
+  mutate(log2_TMMCPM=log2(TMMCPM+1)) %>% 
+  arrange(group)  %>% 
+  filter(genome=="PVP01")
+
+ggplot(pos_gex_all, aes(x=sample_id, y=log2_TMMCPM)) +
+  geom_boxplot(aes(fill=group)) +
+  theme(axis.text.x = element_text(angle=25, vjust=1, hjust=1))
+```
+
+## PCA 
+
+### Pv Genes 
+
+```{r}
+pv_pheno <- pull(pvivax_manifest, group, name=sample_id)
+pv_PCA <- PCA(expnData = pv_expression$counts[,-1],
+              phenovector = pv_pheno, ntop = 500)
+```
+
+```{r}
+cc_group <- get_palette("jco", k=length(unique(pvivax_manifest$group))) %>% 
+  set_names(unique(pvivax_manifest$group))
+```
+
+```{r fig.height=4,fig.width=7}
+# pdf("figures/sample_qc/Pvivax_cated_samples_labels_500_mostVarGenes_PVP01genome.pdf", height = 5, width = 5)
+pv_PCA$pca_plots[[1]] +
+  scale_color_manual(values=cc_group) +
+    ggrepel::geom_text_repel(data=pv_PCA$pca_data$scores,
+                       mapping=aes(x=PC1, y=PC2, label=name),
+                       max.overlaps=20, size=3,
+                       point.padding = 0.01,
+                       min.segment.length=0.01) 
+# dev.off()
+```
+
+```{r fig.height=5, fig.width=7}
+# pdf("figures/sample_qc/Pvivax_cated_samples_500_mostVarGenes_PF3D7genome.pdf", height = 5, width = 7)
+pv_PCA$pca_plots[[1]] + pv_PCA$pca_plots[[2]] 
+# dev.off()
+```
+
+## All Genomes 
+
+```{r}
+pheno <- pull(pvivax_manifest, group, name=sample_id)
+
+pca_grps <- PCA(expnData = all_genomes_expression$counts, phenovector = pheno,ntop = 1000)
+```
+
+```{r fig.height=6, fig.width=7}
+pca_grps$pca_plots[[1]] + pca_grps$pca_plots[[2]]
+```
+
+```{r}
+pca_grps$pca_data$rotation %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  left_join(., species_genes, by="gene_id") %>% 
+  group_by(genome) %>% 
+  dplyr::count()
+```
+
+## Most Varied Genes 
+
+```{r}
+suppressPackageStartupMessages(library(circlize))
+```
+
+```{r fig.height=7, fig.width=14}
+# col <- colorRampPalette(c("cyan1", "cyan2", "cyan3", "cyan4","azure4","magenta4", "magenta3", "magenta2", "magenta1"))(n=299)
+color_map <- colorRamp2(c(-2.0,-1.0, 0,1.0, 2.0), c("dodgerblue4", "dodgerblue1","white","red1", "red4"), space="sRGB") #use for breaks.
+
+# pdf("figures/sample_qc/pvivax_pos_top500MostVarGenes_heatmap.pdf", height = 8, width = 14)
+create_pv_heatmaps(TMMCPM=pv_expression$TMMCPM,
+                   sample_annots=pvivax_manifest, 
+                   gene_annots=species_genes,
+                   order_ids = pvivax_manifest$sample_id,
+                   heatmap_colors = color_map,
+                   ntop=500)
+# dev.off()
+```
+
+```{r fig.height=7, fig.width=14}
+# pdf("figures/sample_qc/pvivax_pos_top1000MostVarGenes.pdf", height = 8, width = 14)
+create_pv_heatmaps(TMMCPM=pv_expression$TMMCPM,
+                   sample_annots=pvivax_manifest, 
+                   gene_annots=species_genes,
+                   order_ids = pvivax_manifest$sample_id,
+                   heatmap_colors = color_map,
+                   ntop=1000)
+# dev.off()
+```
+
+
+## Largest Fold-change Genes
+
+```{r}
+DEG_df <- read.csv("DEGs/kappe_s_Pvivax_PI4KvsControl_DEGs.csv", 
+                   header=TRUE, comment.char = "#")
+
+head(DEG_df)
+dim(DEG_df)
+```
+
+
+```{r eval=FALSE}
+pv_dge$samples$group <- as.factor(pv_dge$samples$group)
+grps <- levels(pv_dge$samples$group)[-1]
+ref <- levels(pv_dge$samples$group)[1]
+
+
+pheno <- pv_dge$samples$group %>% 
+    set_names(rownames(pv_dge$samples))
+
+PI4KvsCont <- voom_de(expnData=pv_expression$counts[,-1],
+          pheno = pheno,
+          ref = ref)
+
+# saveRDS(PI4KvsCont,"DEGs/kappe_s_Pvivax_PI4KvsControl_DEGs.RDS")
+
+# PI4KvsCont$eBayesFit$contrasts
+DEG_df <- PI4KvsCont$DEGs %>% 
+  arrange(desc(logFC)) %>% 
+  rownames_to_column("gene_id") %>%
+  mutate(dir=ifelse(logFC > 0 , "up", "down")) %>% 
+  left_join(., species_genes, by="gene_id")
+
+DEG_df
+# table(DEG_df$dir)
+
+
+# cat(c("# Differential expression analysis with limma voom comparing: Mice treated with PI4K inhibitors (N=3) vs Control mice (N=3)\n"),
+#     file = "DEGs/kappe_s_Pvivax_PI4KvsControl_DEGs.csv")
+# write.table(DEG_df, "DEGs/kappe_s_Pvivax_PI4KvsControl_DEGs.csv",
+#             sep=",", append = TRUE, row.names = FALSE)
+```
+
+```{r}
+include <- DEG_df %>% 
+  group_by(dir) %>% 
+  arrange(desc(abs(logFC)), .by_group = TRUE) %>% 
+  dplyr::slice(1:200) %>% 
+  ungroup() %>% 
+  arrange(desc(logFC))
+
+table(include$dir)
+```
+
+```{r}
+# pdf("figures/sample_qc/Pvivax_cated_samples_largestFC_PVP01genome_heatmap.pdf", height = 10, width = 7)
+create_pv_heatmaps(TMMCPM=pv_expression$TMMCPM,
+                   sample_annots=pvivax_manifest, 
+                   gene_annots=species_genes,
+                   order_ids = pvivax_manifest$sample_id,
+                    genelist=include$gene_id,
+                   heatmap_colors = color_map)
+# dev.off()
+```
+
+
+# Compare to P. Falciparum 
+
+
+```{r}
+library(UpSetR)
+```
+
+```{r}
+DEG_df <-  read.delim("DEGs/kappe_s_Pvivax_PI4KvsControl_DEGs.csv", sep=",",comment.char = "#")
+
+head(DEG_df)
+```
+
+```{r}
+pvivax_manifest$description %>% 
+  unique()
+table(orthologs$deprecated) #None deprecated
+```
+
+```{r}
+orthologs_clean <- orthologs %>% 
+  select(gene_id, input_ortholog_s,product_description) %>% 
+  mutate(number_mapped_orthologs=str_count(input_ortholog_s, pattern = ",")+1) %>% 
+  mutate(multiple_mapped_orthologs=number_mapped_orthologs > 1) %>% 
+  select(gene_id, gene_id_PVP01=input_ortholog_s) 
+
+head(orthologs_clean)
+# table(duplicated(orthologs_clean$gene_id)) #FALSE
+# table(orthologs_clean$multiple_mapped_orthologs) #480 have more than 1 PVP01 gene_id identified as an ortholog. 
+```
+
+```{r}
+Pf_day2_PI4K <- read.csv("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",comment.char = "#") %>% 
+  select(gene_id, matches("logFC|adj.P.Val")) %>% 
+  
+  full_join(select(DEG_df, gene_id_PVP01=gene_id, matches("logFC|adj.P.Val")) %>%
+              left_join(.,orthologs_clean, by=c("gene_id_PVP01")) %>%
+              filter(!is.na(gene_id)), #we can only compare those genes with a matching ortholog ID
+            by="gene_id", 
+            suffix = c("_PF3D7", "_PVP01")) %>%
+  filter(!is.na(gene_id_PVP01), !is.na(logFC_PF3D7)) %>% 
+  mutate(upregulated_pvivax_PI4K=ifelse( logFC_PVP01 > 0, 1, 0),
+         downregulated_pvivax_PI4K=ifelse( logFC_PVP01 < 0, 1,0),
+         upregulated_pfalciparum_Day2=ifelse(logFC_PF3D7 > 0, 1, 0),
+         downregulated_pfalciparum_Day2=ifelse(logFC_PF3D7 < 0, 1,0))
+  
+  # mutate(across(.cols = matches("^up|^down"), 
+  #               .fns = ~replace_na(.x, 0))) 
+
+dim(Pf_day2_PI4K) #270
+# any(duplicated(Pf_day2_PI4K$gene_id))
+# table(Pf_day2_PI4K$upregulated_pvivax)
+```
+
+```{r}
+Pf_day2_PI4K %>% 
+  filter(upregulated_pvivax_PI4K==1, 
+         downregulated_pfalciparum_Day2==1) %>% 
+  write.table(., "Orthologs_downregulated_pfalciparum_Day2_upregulated_pvivax_PI4K.csv",row.names = F,
+              sep=",")
+```
+
+
+```{r fig.height=5, fig.width=7}
+Pf_day2_PI4K_upset <- Pf_day2_PI4K %>% 
+  select(gene_id, upregulated_pvivax_PI4K:downregulated_pfalciparum_Day2) %>% 
+  upset(.,
+        matrix.color="grey20",
+        main.bar.color = paste0("red",seq(4,2, by=-1)),
+        sets.bar.color = paste0("red",seq(4,1, by=-1)),
+        point.size = 5,
+        line.size = 1.0,
+        decreasing = c(FALSE,TRUE),
+        shade.color = alpha("red", alpha = 0.1),
+        text.scale = 1.5,
+        mb.ratio = c(0.6,0.4),
+        order.by = c("degree", "degree"),
+        sets = rev(c("upregulated_pfalciparum_Day2","upregulated_pvivax_PI4K",
+                    "downregulated_pfalciparum_Day2", "downregulated_pvivax_PI4K")),
+        keep.order = TRUE,
+        sets.x.label = "Total Number of Genes\n Per Set",
+        mainbar.y.label = "Number of Genes")
+
+# pdf("figures/pfalciparum_day2_vs_pvivax_PI4K_ortholog_overlap_upset.pdf", height = 7, width = 10)
+Pf_day2_PI4K_upset
+# dev.off()
+```
+
+```{r}
+Pf_day6_PI4K <- read.csv("DEGs/kappe_s_Day6_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
+                         comment.char = "#") %>% 
+  select(gene_id, matches("logFC|adj.P.Val")) %>% 
+  full_join(select(DEG_df, gene_id_PVP01=gene_id, matches("logFC|adj.P.Val")) %>%
+              left_join(.,orthologs_clean, by=c("gene_id_PVP01")) %>%
+              filter(!is.na(gene_id)), #we can only compare those genes with a matching ortholog ID
+            by="gene_id", 
+            suffix = c("_PF3D7", "_PVP01")) %>%
+  
+  filter(!is.na(gene_id_PVP01), !is.na(logFC_PF3D7)) %>% 
+  
+  mutate(upregulated_pvivax_control=ifelse( logFC_PVP01 < 0, 1, 0),
+         downregulated_pvivax_control=ifelse( logFC_PVP01 > 0, 1,0),
+         upregulated_pfalciparum_Day6=ifelse(logFC_PF3D7 > 0, 1, 0),
+         downregulated_pfalciparum_Day6=ifelse(logFC_PF3D7 < 0, 1,0))
+ 
+dim(Pf_day6_PI4K)  #544  10
+```
+
+
+```{r fig.height=5, fig.width=7}
+Pf_day6_PI4K_upset <- Pf_day6_PI4K %>% 
+  select(gene_id, upregulated_pvivax_control:downregulated_pfalciparum_Day6) %>% 
+
+
+  upset(.,
+        matrix.color="grey20",
+        point.size = 5,
+        line.size = 1.0,
+        decreasing = c(FALSE,FALSE),
+        shade.color = alpha("royalblue", alpha = 0.05),
+        main.bar.color = paste0("royalblue",seq(4,1, by=-1)),
+        sets.bar.color = paste0("royalblue",seq(4,1, by=-1)),
+        text.scale =1.7,
+        mb.ratio = c(0.6,0.4),
+        sets = rev(c("upregulated_pfalciparum_Day6","upregulated_pvivax_control",
+                    "downregulated_pfalciparum_Day6", "downregulated_pvivax_control")),
+        keep.order = TRUE,
+        order.by = c("degree", "freq"),
+        sets.x.label = "Total Number of Genes\n Per Set",
+        mainbar.y.label = "Number of Genes\n Overlapping")
+
+pdf("figures/pfalciparum_day6_vs_pvivax_control_ortholog_overlap_upset.pdf", height = 7, width = 10)
+Pf_day6_PI4K_upset
+dev.off()
+```
+
+
+
+
+# Share the Data 
+
+I think I need to consider best practices here... not sure yet. 
+
+```{bash}
+rsync -av DEGs /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+rsync -av figures /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+rsync -av expression_data /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+rsync -av presentations /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+```
+
+
+
+
+# Session Information
+
+```{r}
+sessionInfo()
+```
+
+
+

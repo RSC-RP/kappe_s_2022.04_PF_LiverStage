@@ -24,3 +24,10 @@ samples/
 presentations/
 ~*
 *.gmt
+GO_enrichment/
+env/
+motif_analysis/
+sashimi_plot.R
+splicing/
+star/
+time_course/

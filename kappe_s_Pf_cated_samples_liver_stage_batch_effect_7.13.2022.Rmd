@@ -1,5 +1,5 @@
 ---
-title: "PF Liver Stage Sample Manifest"
+title: "PF Liver Stage Batch Effect Investigation"
 author: "Jenny L Smith"
 date: "`r Sys.Date()`"
 output: html_document
@@ -31,6 +31,7 @@ library(patchwork)
 library(limma)
 library(edgeR)
 suppressPackageStartupMessages(library(sva))
+library(Biobase)
 
 getwd()
 ```
@@ -553,6 +554,7 @@ head(sra_run_table)
 ```{r}
 #For the concatenated samples 
 sample_manifest_cated <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_concat_sample_manifest.csv") %>% 
+  
   group_by(analysis_group) %>%
   mutate(analysis_group_id=case_when(
     grepl("control|sporozorite", analysis_group) ~ glue::glue("{var}", "_S{1:n()}",
@@ -645,6 +647,7 @@ dim(counts_matrix_cated)
 #All Pf+/- samples
 pf_counts <- counts_matrix_cated[pf_genes$gene_id,]
 dim(pf_counts)
+
 pf_dge <- edgeR::DGEList(counts = pf_counts[,-1],
                          samples = sample_manifest_cated,
                          remove.zeros=FALSE)
@@ -655,7 +658,7 @@ pf_dge <- edgeR::calcNormFactors(pf_dge, method="TMMwsp")
 pf_TMMCPM <- as.data.frame(edgeR::cpm(pf_dge, normalized.lib.sizes = TRUE, log=FALSE))
 
 dim(pf_TMMCPM)  #5188   31
-head(pf_TMMCPM[,1:5])
+# head(pf_TMMCPM[,1:5])
 rm(pf_keep)
 ```
 
@@ -675,7 +678,7 @@ dim(pf_sel_CPM)
 rm(keep)
 ```
  
-# Expression Set Object
+## Expression Set Object
 
 ```{r}
 ##Only including the Pf samples for the parasites paper
@@ -771,23 +774,22 @@ In contrast, direct adjustment only removes the effect of known batch variables.
 All sources of latent biological variation will remain in the data using this approach.
 
 ```{r}
-quantile(pf_dge$counts)
-```
-
-```{r}
 cb <- readRDS("expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS")
 
-# cb <- ComBat_seq(pf_dge$counts, #use raw counts
-#                  batch = pf_dge$samples$batch, 
-#                  group = pf_dge$samples$analysis_factor_group,
+input_dge <- pf_dge #pf_dge
+# cb <- ComBat_seq(input_dge$counts, #use raw counts
+#                  batch = input_dge$samples$batch,
+#                  group = input_dge$samples$analysis_factor_group,
 #                  shrink=FALSE)
 
+dim(cb)
 quantile(cb) # 0 1,316,352
+quantile(input_dge$counts)
 # saveRDS(cb,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS")
 ```
 
 ```{r eval=FALSE}
-# Should not be necessary - see original publication
+# Shrink Should not be necessary - see original publication
 cb_shrink <- ComBat_seq(pf_dge$counts, #use raw counts
                  batch = pf_dge$samples$batch, 
                  group = pf_dge$samples$analysis_factor_group,
@@ -804,9 +806,8 @@ pf_combat_full_dge <- DGEList(counts=cb,
 pf_combat_full_dge <- edgeR::calcNormFactors(pf_combat_full_dge, method="TMMwsp")
 
 dim(pf_combat_full_dge)
-range(pf_combat_full_dge$counts)
+quantile(pf_combat_full_dge$counts)
 ```
-
 
 ```{r}
 pf_combat_dge <- DGEList(counts=cb[,pf_samples$sample_id_cat],
@@ -814,13 +815,41 @@ pf_combat_dge <- DGEList(counts=cb[,pf_samples$sample_id_cat],
 
 pf_combat_dge <- edgeR::calcNormFactors(pf_combat_dge, method="TMMwsp")
 dim(pf_combat_dge)
-range(pf_combat_dge$counts)
+quantile(pf_combat_dge$counts)
+# any(rowSums(cpm(pf_combat_dge)) == 0) # FALSE - OK
+```
+
+
+## Expresson Set / Experiment Object 
+
+```{r}
+suppressPackageStartupMessages(library(SummarizedExperiment))
 ```
 
 ```{r}
-# head(pf_combat_dge$samples)
-# head(pf_sel_dge$samples)
+cb_SE <- SummarizedExperiment(assays=SimpleList(cpm=cpm(pf_combat_dge), 
+                                                raw_counts=pf_combat_dge$counts), 
+                              colData = pf_samples,
+                              rowData = pf_genes[rownames(pf_combat_dge),])
+
+
+cb_SE
+# saveRDS(cb_SE, "expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS")
 ```
+
+```{r}
+cb_eset <- Biobase::ExpressionSet(assayData=cpm(pf_combat_dge, log=TRUE, prior.count = 1),
+                                phenoData = Biobase::AnnotatedDataFrame(pf_samples),
+                                featureData = Biobase::AnnotatedDataFrame(pf_genes[rownames(pf_combat_dge),]),
+                                annotation="Pf3D7v58")
+
+
+cb_eset
+# saveRDS(exprs, "expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_expressionSet.RDS")
+```
+
+
+## DE Analysis
 
 ```{r}
 grps <- levels(pf_combat_dge$samples$analysis_factor_group)[-1]
@@ -843,14 +872,7 @@ names(combat_de) <- grps
 ```
 
 ```{r}
-# a strong increase in DEGs in Day 2 and Day 4 vs SPZ, but otherwise a change of ~ +200-300 more DE genes identified. 
-bind_cols(sapply(combat_de, function(x) dim(x$DEGs)),
-  sapply(comparisons, function(x) dim(x$DEGs))) %>% 
-  select(colnames(.)[order(colnames(.))])
-```
-
-```{r}
-save=false
+save=FALSE
 statement <- "Differential expression analysis with limma voom comparing:"
 correction <- "counts corrected for batch effect: combat-seq"
 
@@ -871,7 +893,9 @@ combat_DEGs <- lapply(names(combat_de), function(grp){
 
   df <- x$DEGs %>%
     arrange(desc(logFC)) %>% 
-    rownames_to_column("gene_id")
+    rownames_to_column("gene_id") %>% 
+    mutate(dir=ifelse(logFC > 0,"up", "down")) %>% 
+    left_join(., species_genes, by="gene_id")
   
    df_all <- x$all_genes %>%
     arrange(desc(logFC)) %>% 
@@ -893,7 +917,7 @@ combat_DEGs <- lapply(names(combat_de), function(grp){
   df
 })
 
-combat_DEGs
+# combat_DEGs
 ```
 
 ```{r}
@@ -907,6 +931,175 @@ sapply(combat_de, function(x) nrow(x$DEGs))
 sapply(combat_de, function(x) nrow(x$all_genes))
 ```
 
+### Volcano Plots 
+
+```{r}
+volcano_plot <- function(eBayesFit, cut.off=2.5, label.offset=0.5){
+  
+  library(limma)
+  library(tibble)
+  library(ggplot2)
+  library(ggrepel)
+  
+  #Only prints out - cannot be saved
+  # vplot1 <- volcanoplot(eBayesFit, 
+  #             highlight = 5, 
+  #             names=rownames(eBayesFit),
+  #             pch=16, cex=1.75)
+
+  df <- data.frame(logFC=eBayesFit$coefficients[,1],
+                   pValue=eBayesFit$p.value[,1],
+                   FDR=p.adjust(eBayesFit$p.value[,1], method="BH"),
+                   MeanExpression=eBayesFit$Amean) %>%
+      rownames_to_column("Gene") %>%
+      mutate(Neg.Log10.P= -log10(pValue),
+             Neg.Log10.FDR= -log10(FDR),
+             DEGs.Groups=case_when(
+                  logFC > 1.0 & FDR < 0.05 ~ "FC Greater than 2",
+                  logFC < -1.0 & FDR < 0.05 ~ "FC Less than 2",
+                  TRUE ~ "Not Significant FC"))
+
+  
+  #Select differentially expressed genes to highlight in the plot. 
+  idx <- which(abs(df$logFC) > cut.off & df$FDR < 0.05)
+  
+ 
+  vplot2 <- ggplot(df, aes(x=logFC, y=Neg.Log10.FDR)) + 
+    geom_point(data = filter(df, DEGs.Groups == "Not Significant FC"), 
+               mapping = aes(x=logFC, y=Neg.Log10.FDR, color=DEGs.Groups), alpha=0.65)  +
+    
+    geom_point(data= filter(df, grepl("2", DEGs.Groups)), 
+               mapping = aes(x=logFC, y=Neg.Log10.FDR, color=DEGs.Groups)) +
+    
+    geom_vline(xintercept=c(-1,1)) +
+    geom_hline(yintercept = -log10(0.05)) +
+    
+    scale_color_manual(values=c("FC Greater than 2"="red", 
+                                "FC Less than 2"="blue",
+                                "Not Significant FC"="lightgrey")) +
+    
+    theme(plot.title = element_text(hjust = 0.5, size = 20),
+          panel.background = element_rect(fill="white"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_rect(color = "black", fill=NA),
+          axis.text = element_text(color = "black"),
+          axis.text.x = element_text(angle = 0,hjust=0.5,vjust = 0.5, size = 26),
+          axis.text.y = element_text(size = 25),
+          axis.title = element_text(size = 30),
+          plot.margin = margin(2,2,2,2, unit = "mm")) +
+      
+    geom_text_repel(aes(x=logFC, y=Neg.Log10.FDR, label=Gene),
+                    size=3.5,
+                    data=df[idx, ])
+ 
+  res <- list("gg.volcano"=vplot2, "data"=df)
+  return(res)
+}
+```
+
+```{r}
+
+species_genes %>% 
+  mutate(gene_order=factor(gene_id, levels=rownames(combat_de$Day2_Heps_Pf$eBayesFit$coefficients))) %>% 
+  select(gene_name, gene_id, gene_order) %>% 
+  filter(!is.na(gene_order)) %>% 
+  arrange(gene_order)
+```
+
+```{r}
+vp <- volcano_plot(combat_de$Day2_Heps_Pf$eBayesFit)
+
+```
+
+```{r}
+DEGs_full <- lapply(dir("DEGs", pattern="corrected_unfiltered_DEGs", full.names = TRUE),
+                    function(x) read.delim(x, sep=",",  comment.char = "#") %>% 
+                      left_join(., select(species_genes, gene_id, gene_name),
+                                by="gene_id"))
+names(DEGs_full) <- dir("DEGs", pattern="corrected_unfiltered_DEGs") %>%  gsub("kappe.+(Day[0-9])_.+", "\\1", .)
+
+head(DEGs_full$Day2)
+
+quantile(DEGs_full$Day2$adj.P.Val)
+quantile(DEGs_full$Day2$logFC)
+quantile(DEGs_full$Day2$t)
+```
+
+```{r}
+pal <- circlize::colorRamp2(c(-10,-6,-2, 0,2, 6, 10),
+                      c("deepskyblue4", "deepskyblue2", "deepskyblue","white", "red", "red2", "red4"),
+                      space="LAB")
+
+
+
+```
+
+```{r}
+ggvolcano_plot <- function(DEGs, jitter_width=0.4, jitter_height=0.4){
+  colorPal <- colorRampPalette(c("deepskyblue4", "deepskyblue3", "deepskyblue2",
+                                 "deepskyblue1","white","red1", "red2", "red3", "red4"))(n=299)
+
+  df <- DEGs %>% 
+    mutate(logFC_plot=case_when(
+                        adj.P.Val >= 0.05 ~ NA_real_,
+                        TRUE ~ logFC)) %>% 
+    mutate(direction=case_when(
+      logFC > 0 & adj.P.Val < 0.05 ~ "up",
+      logFC < 0 & adj.P.Val < 0.05 ~ "down",
+      adj.P.Val > 0.05 ~ "not significant",
+    ))
+  
+  limit <- max(abs(df$logFC)) * c(-1, 1)
+  
+  sel_genes <- df %>% 
+    filter(direction != "not significant") %>% 
+    group_by(direction) %>% 
+    arrange(desc(abs(logFC)), .by_group = TRUE) %>% 
+    dplyr::slice(1:10) %>% 
+    # filter(abs(logFC) >= quantile(abs(logFC), probs=0.99)) %>% 
+    ungroup()
+  
+  ggplot(df, aes(x=logFC, y=-log10(adj.P.Val))) +
+    geom_point(data = df %>% filter(is.na(logFC_plot)),
+                mapping = aes(x=logFC, y=-log10(adj.P.Val), color=logFC_plot),
+               position = position_jitter(width = jitter_width, height = jitter_height),
+               alpha=0.2, size=2) +
+    geom_point(data = df %>% filter(!is.na(logFC_plot)),
+               mapping = aes(color=logFC_plot),
+               position = position_jitter(width = jitter_width, height = jitter_height),
+               alpha=0.2, size=2) +
+    scale_x_continuous(expand = c(0.25, 0.25)) +
+    # scale_color_distiller(type = "div", limit = limit) +
+
+    scale_color_gradientn(colours = colorPal,
+                          na.value = alpha("grey90",alpha = 0.05),
+                          limit=limit) +
+
+    geom_text_repel(data= sel_genes,
+                    mapping = aes(x=logFC, y=-log10(adj.P.Val), label=gene_name),
+                    min.segment.length=unit(1.5,"mm"),
+                    point.padding = 0,
+                    box.padding=0.1,
+                    max.overlaps=20,
+                    size=2.5) +
+    theme_classic()
+}
+```
+
+```{r}
+volcano_plots <- purrr::map(DEGs_full,ggvolcano_plot)
+# names(volcano_plots)
+```
+
+```{r}
+purrr::map(names(volcano_plots), function(plot_ID){
+  svg(paste0("figures/combat_seq/DE_volcano_plots/kappe_s_",plot_ID,"_vs_SPZ_volcano_plot.svg"), height = 5, width = 7)
+  print(volcano_plots[[plot_ID]])
+  dev.off()
+})
+```
+
 
 ### Comparison Corrected vs Uncorrected
 
@@ -914,9 +1107,16 @@ https://github.com/mani2012/BatchQC/blob/master/R/utils.R
 
 ```{r}
 # install.packages("../../BatchQC_1.21.0.tar.gz", type="source", repos = NULL)
-suppressPackageStartupMessages(library(BatchQC, lib.loc = normalizePath("~/R/x86_64-pc-linux-gnu-library/4.1")))
+suppressPackageStartupMessages(library(BatchQC,
+                                       lib.loc = normalizePath("~/R/x86_64-pc-linux-gnu-library/4.1")))
 ```
 
+```{r}
+# a strong increase in DEGs in Day 2 and Day 4 vs SPZ, but otherwise a change of ~ +200-300 more DE genes identified. 
+bind_cols(sapply(combat_de, function(x) dim(x$DEGs)),
+  sapply(comparisons, function(x) dim(x$DEGs))) %>% 
+  select(colnames(.)[order(colnames(.))])
+```
 
 ```{r}
 combat_genes <- lapply(combat_DEGs, pull, "gene_id")
@@ -940,23 +1140,19 @@ pf_combat_full_dge #N=31 combat-seq
 pf_combat_dge #N=17, combat-seq
 
 ```{r}
-dim(pf_combat_full_dge)
-combat_explained_var <- batchqc_explained_variation(cpm(pf_combat_full_dge, log=TRUE),
-                                                    condition=pf_combat_full_dge$samples$analysis_factor_group,
-                                                    batch=pf_combat_full_dge$samples$batch)
-# $explained_variation
-# str(combat_explained_var)
-head(combat_explained_var$explained_variation)
-```
+combat_input <- pf_combat_full_dge
+combat_explained_var <- batchqc_explained_variation(cpm(combat_input, log=TRUE),
+                                                    condition=combat_input$samples$analysis_factor_group,
+                                                    batch=combat_input$samples$batch)
+unadj_input <- pf_dge
+explained_var <- batchqc_explained_variation(cpm(unadj_input, log=TRUE),
+                                             condition=unadj_input$samples$analysis_factor_group,
+                                             batch=unadj_input$samples$batch)
+dim(combat_input)
+dim(unadj_input)
 
-```{r}
-dim(pf_dge)
-explained_var <- batchqc_explained_variation(cpm(pf_dge, log=TRUE),
-                                             condition=pf_dge$samples$analysis_factor_group,
-                                             batch=pf_dge$samples$batch)
-# $explained_variation
-str(explained_var)
-# head(explained_var$explained_variation)
+quantile(cpm(combat_input, log=TRUE))
+quantile(cpm(unadj_input, log=TRUE))
 ```
 
 ```{r}
@@ -967,17 +1163,18 @@ corrected_vs_uncorrected <- combat_explained_var$explained_variation %>%
   bind_rows(., as.data.frame(explained_var$explained_variation) %>% 
               rownames_to_column("gene_id") %>% 
               mutate(status="uncorrected")) %>% 
-  # mutate_all(~as.character(.)) %>% 
   pivot_longer(cols = matches("condition|batch"), 
                names_to="column_name", values_to="value")
 
 
 head(corrected_vs_uncorrected)
+dim(corrected_vs_uncorrected)
 ```
 
 ```{r}
 
-plt_varexp_full <- ggplot(corrected_vs_uncorrected, aes(x=column_name, y=value, fill=status)) +
+plt_varexp_full <- ggplot(corrected_vs_uncorrected,
+                          aes(x=column_name, y=value, fill=status)) +
   geom_boxplot() +
   facet_wrap(~status, nrow=1, ncol=2) +
   labs(y="Explained variation") +
@@ -990,8 +1187,6 @@ plt_varexp_full <- ggplot(corrected_vs_uncorrected, aes(x=column_name, y=value, 
 plt_varexp_full
 # dev.off()
 ```
-
-
 
 # SVA
 
