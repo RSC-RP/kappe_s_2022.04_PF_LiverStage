@@ -2090,42 +2090,15 @@ purrr::map(names(res),function(df_ID){
 # tab
 ```
 
-$c1
-[1] 20 13
-
-$c2
-[1]  5 13
-
-$C3
-[1] 20 13
-
-$C4
-[1]  0 13
-
-$C5
-[1]  3 13
-
-$C6
-[1]  0 13
-
-$day2_vs_spz_downreg
-[1]  3 13
-
-$day2_vs_spz_upreg
-[1]  0 13
 
 # Share the Data
 
 ```{bash}
 destination="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/"
-rsync -av time_course $destination
+rsync -av --exclude degree1 time_course/masigpro $destination
 rsync -av figures $destination
 rsync -av GO_enrichment $destination
-rsync -av homer $destination
-```
-
-```{r}
-
+rsync -av motif_analysis --exclude results_jaspar2020_db --exclude outfiles $destination
 ```
 
 

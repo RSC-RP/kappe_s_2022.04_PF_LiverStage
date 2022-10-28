@@ -34,11 +34,6 @@ library(SummarizedExperiment)
 library(patchwork)
 ```
 
-```{r}
-conflicted::conflict_prefer("select","dplyr")
-conflicted::conflict_prefer("filter","dplyr")
-```
-
 # Define Functions 
 
 ```{r}
@@ -86,9 +81,9 @@ cb_eset <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samp
 # Genomic References 
 
 ```{r}
-txDB <- AnnotationDbi::loadDb(file="species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7.sqlite")
-# txDB <- GenomicFeatures::makeTxDbFromGFF(file="species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7.gtf")
-# AnnotationDbi::saveDb(txDB,file = "PlasmoDB-58_Pfalciparum3D7.sqlite")
+edb <- ensembldb::EnsDb("species_genomes/GRCh38_GRCm39_Pf3D7v58.sqlite")
+
+edb
 ```
 
 ```{r}
@@ -121,9 +116,6 @@ Required Inputs:
 - BigWig coverage files
 
 https://bioconductor.org/packages/release/bioc/vignettes/dasper/inst/doc/dasper.html
-
-https://www.biorxiv.org/content/10.1101/2021.03.29.437534v1.full
-
 https://github.com/LieberInstitute/megadepth
 
 ```{r}
@@ -132,7 +124,6 @@ https://github.com/LieberInstitute/megadepth
 
 library(dasper)
 library(megadepth)
-# options(MulticoreParam=quote(BiocParallel::MulticoreParam(4)))
 
 # default installation path: ~/bin
 # install_megadepth() # only run 1x
@@ -173,10 +164,10 @@ outbams <- basename(bams) %>%
   gsub(".Aligned.",".Pf_Aligned.", .) %>%  
   file.path(here::here(),"star/pf_aligned", .)
 
-# head(outbams)
+head(outbams)
 ```
 
-```{r eval=FALSE}
+```{r}
 regions_bed <- here::here("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_Genome.chrom_sizes.bed")
 save_scripts <- purrr::map2(.x = bams, .y = outbams, function(input,output){
   
@@ -192,7 +183,7 @@ save_scripts <- purrr::map2(.x = bams, .y = outbams, function(input,output){
 })
 ```
 
-```{bash eval=FALSE}
+```{bash}
 conda env create -f env/samtools.yml
 conda activate samtools
 cd star/pf_aligned/
@@ -201,268 +192,42 @@ do
   chmod +x $file 
   ./$file
 done
-
-for file in $(ls -1 *.bam)
-do
-  samtools index $file
-done
 ```
 
-```{r eval=FALSE}
-sj_tabs <- dir("star", pattern = "*.tab", full.names=TRUE) %>% 
-  file.path(here::here(), .)
 
-chrom_names <- names(genome_fasta) %>% 
-  paste(., collapse="|")
+```{r}
 
-subset_sjs <- purrr::map(sj_tabs, function(sjs){
-  outfile <- basename(sjs) %>% 
-    gsub(".SJ.",".Pf_SJ.", .) %>% 
-    file.path(here::here(), "star/pf_aligned", .)
-  
-  cmd <- glue::glue("grep -E \"{chrom_names}\" {sjs} > {outfile}")
-  if(!file.exists(outfile)){
-    system(cmd)
-  }
-  
-})
 ```
+
 
 
 ### Convert BAM to BigWigs
 
-```{r eval=FALSE}
-dir.create("star/bigwigs", recursive = T, showWarnings = F)
+```{r}
+dir.create("star/bigwigs", recursive = T)
 
-save_bigwigs <- purrr::map(outbams,function(infile){
-  
-  in_prefix <- basename(infile) %>% 
-      gsub(".bam","",.) %>% 
-      paste0("star/bigwigs/", .)
-  if(!file.exists(paste0(in_prefix,"all.bw")))
-  megadepth::bam_to_bigwig(bam_file = infile,
+infile <- outbams[1]
+in_prefix <- basename(infile) %>% 
+  gsub(".bam","",.) %>% 
+  paste0("star/bigwigs/", .)
+
+megadepth::bam_to_bigwig(bam_file = infile,
                          prefix = in_prefix,
-                         overwrite = FALSE)
-})
+                         overwrite = TRUE)
 ```
-
-
-## Dasper workflow
-
-### All Days 2,4,5,6 
-
 ```{r}
-junc_files <- data.frame(SJ.out.tab=dir("star/pf_aligned", pattern = "*.tab", full.names = T) %>% 
-                           file.path(here::here(), .)) %>% 
-  mutate(sample_id_cat = basename(SJ.out.tab) %>% gsub(".Pf_SJ.out.tab","", .)) 
-
-bw_files <- data.frame(bw=dir("star/bigwigs", pattern = "*.bw", full.names = TRUE) %>% 
-                         file.path(here::here(), .)) %>% 
-  mutate(sample_id_cat = basename(bw) %>%  gsub(".Pf_Aligned.+", "", .))
-
-
-pf_samples_dasper <- pf_samples %>% 
-  left_join(., junc_files, by="sample_id_cat") %>% 
-  left_join(., bw_files, by="sample_id_cat") %>% 
-  mutate(controls=ifelse(analysis_group=="sporozorite", TRUE, FALSE))
-
-# pf_samples_dasper
-# write.csv(pf_samples_dasper,"splicing/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_dasper_samples.csv")
+system(paste("ls", grep("Day6.GFP_L1Pf6xTR2_L1Pf6_S5", outbams, value=TRUE))
 ```
 
-```{r}
-juncs <- junction_load(junction_paths = pf_samples_dasper$SJ.out.tab,
-                       metadata = pf_samples_dasper,
-                       controls = pf_samples_dasper$controls)
 
-# juncs
+# Share the Data 
+
+```{bash}
+destination="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/"
+
 ```
 
-```{r}
-juncs <- junction_annot(junctions = juncs, 
-                        ref= txDB)
 
-table(rowData(juncs)$in_ref)
-#FALSE  TRUE 
-# 38797  8333 
-table(rowData(juncs)$type)
-```
-
-```{r}
-juncs <- junction_filter(juncs, 
-                         count_thresh = c(raw = 5),
-                         n_samp = c(raw = 3))
-
-table(rowData(juncs)$in_ref)
-#FALSE  TRUE 
-# 1185  6399 
-# table(rowData(juncs)$type)
-```
-
-For normalization:
-
-cluster each junction by finding all other junctions that share an acceptor or donor site with it. 
-
-Then, calculate the normalized counts by dividing the number of reads supporting each junction with the total number of reads in it’s associated cluster.
-
-For scoring:
-
-score each patient junction by how much it’s (normalized) counts deviate from the count distribution of the same junction in the control samples using junction_score.
-
----> 
-Within introns, a donor site (5' end of the intron), a branch site (near the 3' end of the intron) and an acceptor site (3' end of the intron) are required for splicing.
-
-The splice donor site includes an almost invariant sequence GU at the 5' end of the intron, within a larger, less highly conserved region. 
-
-The splice acceptor site at the 3' end of the intron terminates the intron with an almost invariant AG sequence
-<----
-
-```{r}
-#normalize our raw junctions counts into a proportion-spliced-in 
-juncs <- junction_norm(juncs)
-junctions_norm <- juncs
-
-# Score the junctions compared to controls
-# scoreing the junctions changes the norm counts?? so save the normalized object alone
-juncs <- junction_score(juncs)
-```
-
-```{r}
-SummarizedExperiment::assays(juncs)
-
-head(SummarizedExperiment::assays(juncs)[["norm"]])
-head(SummarizedExperiment::assays(junctions_norm)[["norm"]])
-
-# quantile(SummarizedExperiment::assays(juncs)[["raw"]])
-
-# hist(SummarizedExperiment::assays(juncs)[["norm"]])
-# hist(SummarizedExperiment::assays(junctions_norm)[["norm"]])
-
-# quantile(SummarizedExperiment::assays(juncs)[["score"]])
-```
-
-Coverage Normalization:
-
- normalizing the coverage across regions associated with each junction.
- 
- There are the 2 exonic regions flanking each junction and the intron inbetween == there are 3 regions for each junction. 
- 
-coverage_score:
-
-  used to compare the coverage associated with each junction to the coverage distribution corresponding to the same region in controls.
-
-> For potentially faster BigWig reading performance, please sort your argument to --annotations (BED) file via sort -k1,1 -k2,2n and re-run megadepth.
-
-```{r}
-bw_case <- pf_samples_dasper$bw[!pf_samples_dasper$controls]
-bw_control <- pf_samples_dasper$bw[pf_samples_dasper$controls]
-
-coverage <- coverage_norm(junctions = juncs,
-                          ref = txDB,
-                          coverage_paths_case = bw_case,
-                          coverage_paths_control = bw_control,
-                          bp_param = BiocParallel::MulticoreParam(4))
-```
-
-```{r}
-juncs <- coverage_score(junctions = juncs,
-                        coverage = coverage)
-
-names(SummarizedExperiment::assays(juncs))
-```
-
-```{r}
-juncs <- outlier_detect(
-    junctions = juncs,
-    bp_param = BiocParallel::SerialParam(),
-    # bp_param = BiocParallel::MulticoreParam(4),
-    random_state = 32L
-)
-```
-
- outlier_scores object contains a DataFrame with each row detailing a cluster in terms of how aberrant it looks. 
-
-The gene_id_cluster column describes the gene linked to each cluster, derived from the gene annotations.
-
-Splicing events are ranked in the rank column with 1 referring to the most aberrant splicing event in that patient.
-
-```{r}
-outlier_scores <- outlier_aggregate(junctions = juncs, 
-                                    samp_id_col = "sample_id_cat")
-
-# outlier_scores %>%  
-#   as.data.frame() %>% 
-#   head()
-dim(outlier_scores)
-unique(outlier_scores$samp_id) %>%  length()
-```
-
-```{r}
-assays(juncs)
-outlier_scores[1,"junctions"]
-# outlier_scores[1,"gene_id_cluster"]
-assay(juncs,"raw") %>% head() # doesn't have any rownames or identifiers to help extract the raw counts ...
-juncs@rowRanges[juncs@rowRanges$index %in% c(4689,4726)]
-# view(pf_samples_dasper)
-```
-
-```{r}
-outscores_clean <- outlier_scores %>% 
-  as.data.frame() %>% 
-  left_join(., pf_samples_dasper, by=c("samp_id"="sample_id_cat")) %>% 
-  mutate(has_gene_id=sapply(gene_id_cluster, function(x) length(x) > 0)) %>% 
-  select(samp_id, analysis_group_id, analysis_group,has_gene_id, everything())
-
-outscores_clean
-# length(unique(outscores_clean$analysis_group_id))
-```
-
-```{r}
-temp <- outscores_clean %>% 
-  group_by(samp_id) %>% 
-  filter(has_gene_id) %>% 
-  dplyr::slice(1) %>% 
-  ungroup()
-
-temp
-```
-
-```{r}
-mcols(junctions_norm)
-```
-
-```{r}
-id <- unlist(temp[["gene_id_cluster"]][1])
-dasper::plot_sashimi(junctions = junctions_norm, 
-             ref = txDB, 
-             gene_tx_id = id,
-             gene_tx_col = "gene_id")
-```
-
-```{r}
-junctions_example
-```
-
-### Pairwise Day vs SPZ
-
-```{r}
-junc_files <- data.frame(SJ.out.tab=dir("star/pf_aligned", pattern = "*.tab", full.names = T) %>% 
-                           file.path(here::here(), .)) %>% 
-  mutate(sample_id_cat = basename(SJ.out.tab) %>% gsub(".Pf_SJ.out.tab","", .)) 
-
-bw_files <- data.frame(bw=dir("star/bigwigs", pattern = "*.bw", full.names = TRUE) %>% 
-                         file.path(here::here(), .)) %>% 
-  mutate(sample_id_cat = basename(bw) %>%  gsub(".Pf_Aligned.+", "", .))
-
-
-pf_samples_dasper <- pf_samples %>% 
-  left_join(., junc_files, by="sample_id_cat") %>% 
-  left_join(., bw_files, by="sample_id_cat") %>% 
-  mutate(controls=ifelse(analysis_group=="sporozorite", TRUE, FALSE))
-
-# pf_samples_dasper
-# write.csv(pf_samples_dasper,"splicing/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_dasper_samples.csv")
-```
 
 # Session Info
 
