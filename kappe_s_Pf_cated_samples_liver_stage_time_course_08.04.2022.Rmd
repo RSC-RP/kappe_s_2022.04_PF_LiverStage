@@ -34,7 +34,6 @@ library(SummarizedExperiment)
 library(patchwork)
 library(maSigPro)
 suppressPackageStartupMessages(library(mclust))
-
 ```
 
 # Define Functions 
@@ -213,6 +212,59 @@ dge_dendrograms <- function(expnData, pheno, method,
 
 ```
 
+
+```{r}
+#Pheatmap
+quickPheatmap <- function(expn,geneList, sample_data,
+                          gene_index=NULL,
+                          annots_col_colors=NULL){
+  library(pheatmap)
+
+  len <- 299
+  col <- colorRampPalette(c("deepskyblue4", "deepskyblue3", "deepskyblue2", "deepskyblue1","white","red1", "red2", "red3", "red4"))(n=len)
+
+  e <- expn[geneList, intersect(colnames(expn), rownames(sample_data))]
+  sample_data <- sample_data[intersect(colnames(expn), rownames(sample_data)), ]
+  anno.col <- sample_data
+  #if scaling, this doesnt work. would need to scale the expression matrix myself
+  # Breaks <- c(seq(min(e), 0, length.out=ceiling(len/2) + 1),
+  #             seq(max(e)/len, max(e), length.out=floor(len/2)))
+ 
+  if(is.null(annots_col_colors)){
+    annots_col_colors <- lapply(anno.col, function(column){
+        grps <- unique(column)
+        n <- length(grps)
+        pal <- RColorBrewer::brewer.pal(n,name="Set1")
+        names(pal) <- grps
+        return(pal)
+      })
+  }
+
+
+  p <- pheatmap::pheatmap(mat= e ,
+                     color=col,
+                     border_color="black",
+                     scale = "row", 
+                     cluster_rows=FALSE,
+                     cluster_cols=TRUE,
+                     clustering_method="ward.D2",
+                     clustering_distance_cols="correlation",
+                     annotation_names_col=TRUE,
+                     annotation_col = anno.col,
+                     annotation_colors = annots_col_colors,
+                     gaps_row=gene_index,
+                     show_rownames=TRUE,
+                     fontsize_row=5,
+                     fontsize_col = 10,
+                     # kmeans_k=9,
+                     show_colnames=TRUE)
+
+
+  return(p)
+
+}
+```
+
 ```{r}
 create_annots_hmap <- function(expn, pheno_df, cols,
                                goi=NULL,cc=NULL, 
@@ -221,11 +273,9 @@ create_annots_hmap <- function(expn, pheno_df, cols,
   #gene list a character vector
   #goi are genes of interest to highlight on the Heatmap. Character vector of gene symbols
   #cc are color codes in WHICH FORMAT?
-
   #cols is a character vector of column names
 
-  #Example on how to use the reuslts
-
+  #Example on how to use the reuslts:
   #hmap <- ComplexHmap(XXXX, hmap_anno_obj=res$annoColumn, XXX)
   # draw(hmap + res$geneLabels, heatmap_legend_side="right", annotation_legend_side="right")
 
@@ -303,7 +353,6 @@ create_annots_hmap <- function(expn, pheno_df, cols,
 }
 
 
-
 complex_hmap <- function(mat,
                         hmap_anno_obj,
                         hmap_anno_obj_genes=NULL,
@@ -332,8 +381,17 @@ complex_hmap <- function(mat,
   suppressPackageStartupMessages(library(dendextend))
   ht_opt$message = FALSE
 
+   if(scale){
+      mat <- t(scale(t(mat))) ##rowwise scaling
+   }
+  
+  print(range(mat))
+  min <- round(min(mat))
+  max <- round(max(mat))
+  mid <- round(max/2, digits = 2)
+    
   if(is.null(color_palette)){
-    pal <- colorRamp2(c(-4,-2, 0, 2, 4),
+    pal <- colorRamp2(c(min,-mid, 0, mid, max),
                       c("deepskyblue3", "deepskyblue","white", "red", "red3"),
                       space=space.type)
   }else{
@@ -346,17 +404,13 @@ complex_hmap <- function(mat,
   #legend graphical parameters
   params <-  list(color_bar="continuous",
        legend_direction="horizontal",
-       title_position="leftcenter",
+       title_position="topcenter",
        legend_width=unit(5,"cm"),
        legend_height=unit(5,"cm"),
        title_gp=gpar(fontsize=10,
-                     fontface="bold"))
-
-
-    if(scale){
-      mat <- t(scale(t(mat))) ##rowwise scaling
-    }
-    print(range(mat))
+                     fontface="bold"),
+      at = c(min,-mid, 0,mid, max),
+      just = c("left", "top"))
   
     if(!is.null(dge_dendrograms.res)){
         if(is.null(samp_dend_order)){
@@ -449,58 +503,6 @@ create_pf_heatmaps <- function(TMMCPM,sample_annots, gene_annots,
   
   return(list("dends"=dends,"heatmap"=res))
   
-}
-```
-
-```{r}
-#Pheatmap
-quickPheatmap <- function(expn,geneList, sample_data,
-                          gene_index=NULL,
-                          annots_col_colors=NULL){
-  library(pheatmap)
-
-  len <- 299
-  col <- colorRampPalette(c("deepskyblue4", "deepskyblue3", "deepskyblue2", "deepskyblue1","white","red1", "red2", "red3", "red4"))(n=len)
-
-  e <- expn[geneList, intersect(colnames(expn), rownames(sample_data))]
-  sample_data <- sample_data[intersect(colnames(expn), rownames(sample_data)), ]
-  anno.col <- sample_data
-  #if scaling, this doesnt work. would need to scale the expression matrix myself
-  # Breaks <- c(seq(min(e), 0, length.out=ceiling(len/2) + 1),
-  #             seq(max(e)/len, max(e), length.out=floor(len/2)))
- 
-  if(is.null(annots_col_colors)){
-    annots_col_colors <- lapply(anno.col, function(column){
-        grps <- unique(column)
-        n <- length(grps)
-        pal <- RColorBrewer::brewer.pal(n,name="Set1")
-        names(pal) <- grps
-        return(pal)
-      })
-  }
-
-
-  p <- pheatmap::pheatmap(mat= e ,
-                     color=col,
-                     border_color="black",
-                     scale = "row", 
-                     cluster_rows=FALSE,
-                     cluster_cols=TRUE,
-                     clustering_method="ward.D2",
-                     clustering_distance_cols="correlation",
-                     annotation_names_col=TRUE,
-                     annotation_col = anno.col,
-                     annotation_colors = annots_col_colors,
-                     gaps_row=gene_index,
-                     show_rownames=TRUE,
-                     fontsize_row=5,
-                     fontsize_col = 10,
-                     # kmeans_k=9,
-                     show_colnames=TRUE)
-
-
-  return(p)
-
 }
 ```
 
@@ -719,8 +721,8 @@ pf_design <- make.design.matrix(dplyr::select(design_input,Time:Group),
                                 degree = 1)
 
 # Could use edgeR to define theta, rather than using the default value
-fit <- readRDS("time_course/masigpro_fit_p.vector_D2456.RDS")
-tstep <- readRDS("time_course/masigpro_tstep_D2456.RDS")
+fit <- readRDS("time_course/masigpro/degree1/masigpro_fit_p.vector_D2456.RDS")
+tstep <- readRDS("time_course/masigpro/degree1/masigpro_tstep_D2456.RDS")
 
 # fit <- p.vector(expression, pf_design,
 #                 counts=TRUE,
@@ -945,6 +947,13 @@ tstep_d456  <- T.fit(fit_d456, step.method = "backward")
 "Influence: 85 genes with influential data at slot influ.info. Model validation for these genes is recommended"
 
 ```{r}
+# fit_d456 <- readRDS("time_course/masigpro/masigpro_fit_p.vector_degree2_D456.RDS")
+# fit_d456$p.vector %>% length()
+# fit_d456$p.vector %>% head()
+```
+
+
+```{r}
 tstep_d456 <- readRDS("time_course/masigpro/masigpro_tstep_degree2_D456.RDS")
 
 ## This will obtain all sigificant genes regardless the Rsquared value.
@@ -953,7 +962,8 @@ sigs_all_d456 <- get.siggenes(tstep_d456,
                      vars = "all",
                      trat.repl.spots="none")
 
-sigs_all_d456$sig.genes$sig.pvalues
+
+sigs_all_d456$sig.genes$sig.pvalues %>% head()
 # sigs_all_d456$sig.genes$Time$coefficients
 # sigs_all_d456$sig.genes$Time2$coefficients
 # sigs_all_d456$sig.genes$independ$coefficients
@@ -1122,6 +1132,10 @@ row_ha <- rowAnnotation(df = gene_clust_df,
 
 expn_mat <- sigs_all_d456$sig.genes$sig.profiles[names(ordered_genes),]
 
+
+new_pal <- colorRamp2(c(-4,-2, 0, 2, 4),
+                      c("deepskyblue3", "deepskyblue","white", "red", "red3"),
+                      space="sRGB")
 hmap_time_course <- 
   create_pf_heatmaps(TMMCPM = expn_mat,
                      sample_annots = design_input,
@@ -1139,16 +1153,13 @@ hmap_time_course$heatmap + row_ha
 ```
 
 ```{r}
-# plot(hmap_time_course$dends$samp.c1)
+plot(hmap_time_course$dends$samp.c1)
  
 sample_order <- sigs_all_d456$sig.genes$sig.profiles %>% 
   dplyr::select(Pf_Day0_Rep1:Pf_Day0_Rep5, 
-                
-                Pf_Day6_Rep1, Pf_Day6_Rep2, Pf_Day6_Rep3, 
-                
+                Pf_Day4_Rep2,Pf_Day4_Rep1,Pf_Day4_Rep3,
                 Pf_Day5_Rep2,Pf_Day5_Rep3,Pf_Day5_Rep1,
-                
-                Pf_Day4_Rep2,Pf_Day4_Rep1,Pf_Day4_Rep3)  %>% 
+                Pf_Day6_Rep1, Pf_Day6_Rep2, Pf_Day6_Rep3)  %>% 
   colnames()
 
 # sample_order
@@ -1164,7 +1175,7 @@ hmap_time_course2 <-
 
 ```{r fig.height=10, fig.width=7}
 # pdf("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_re-order_heatmap_d456.pdf",
-    # height = 10, width = 10)
+# height = 10, width = 10)
 hmap_time_course2$heatmap + row_ha
 # dev.off()
 ```
@@ -1175,10 +1186,10 @@ hmap_time_course2$heatmap + row_ha
 ```{r}
 data(data.abiotic)
 data(edesign.abiotic)
-View(edesign.abiotic)
+# View(edesign.abiotic)
 
 design <- make.design.matrix(edesign.abiotic, degree = 2)
-design
+# design
 
 quantile(data.abiotic, na.rm=TRUE)
 
@@ -1197,9 +1208,9 @@ rownames(ss.edesign) <- paste("Array", c(1:12), sep = "")
 ```{r}
 data(NBdata)
 quantile(NBdata)
- data(NBdesign)
+data(NBdesign)
  
-View(NBdesign)
+# View(NBdesign)
 ```
 
 ```{r}
@@ -1693,8 +1704,6 @@ https://plasmodb.org/plasmo/app/search/transcript/GeneByLocusTag
 
 http://current.geneontology.org/products/pages/downloads.html
 
-## ClusterProfiler 
-
 ```{r}
 day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
                       sep=",",comment.char = "#")
@@ -1717,16 +1726,94 @@ names(gene_clusts_dfs) <- paste0("cluster", unique(time_course$gene_cluster))
 ```
 
 ```{r}
-library(clusterProfiler)
-```
-
-```{r}
-GO_annots <- read.delim("expression_data/PF3D7_GO_Terms_PlasmoDB_v58.txt", sep="\t") %>% 
+GO_annots <- read.delim("expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_v58.txt", sep="\t") %>% 
   janitor::clean_names()
 
 head(GO_annots)
 # dim(GO_annots) #37,841    11
 table(GO_annots$ontology)
+```
+
+## ClusterProfiler 
+
+```{r}
+library(clusterProfiler)
+```
+
+```{r}
+clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
+                                         label="go_term_name",Filter=TRUE){
+    
+    column <- glue::glue("Neg_log10_{pval_column}")
+    temp <- data.frame()
+    input <- df %>% 
+      dplyr::mutate( !!column := -log10(!!as.name(pval_column)))
+    
+    if(Filter){
+      temp <- input %>%
+        dplyr::filter( !!as.name(pval_column) < 0.05)
+    }
+    
+    if (nrow(temp) == 0){
+        temp <- input
+    }
+
+    n <- min(10,nrow(temp))
+    temp <- temp %>%
+      mutate(ID=factor(ID, levels = rev(ID))) %>%
+      dplyr::slice(1:n)
+
+    bubble_plot <- ggplot(temp,
+                          aes_string(x=column,
+                                     y="ID")) +
+      geom_point(aes(size=setSize, fill=ID), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(1,10)) +
+      labs(x=glue::glue("-log10({pval_column})"), y="") +
+      scale_y_discrete(expand = c(0.1,0)) +
+      scale_x_continuous(expand = c(0.15,0)) +
+      guides(fill="none",
+             size=guide_legend(title = "Number of Genes",
+                               size = 1)) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA),
+            plot.title = element_text(hjust = 0),
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) 
+
+
+    tab <-  ggplot(temp, aes_string(x = "0", y = "ID", 
+                             label=label, 
+                             color="ontology")) +
+        geom_text(size = 4,
+                  hjust = 0,
+                  nudge_x = 0)  +
+        scale_y_discrete(expand = c(0.1,0)) +
+        # scale_x_continuous(expand = c(0,1)) +
+        scale_x_continuous(expand = expansion(mult = c(0,0.01))) +
+        theme_void()
+
+    bubble_plot +
+      tab +
+      plot_layout(widths = c(1, 2.5), guides='collect') &
+      theme(legend.position='left')
+    
+}
+
+replace_long_strings <- function(string){
+  t <- string
+  if(grepl(",", t)){
+    at <- stringr::str_locate_all(t,",")[[1]][,"end"]
+  }else{
+    at <- stringr::str_locate_all(t," ")[[1]][,"end"]
+  }
+  at <- at[at <= 40][length(at[at <= 40])]
+  stringr::str_sub(t, start=at[1],end = at[1]) <- "\n"
+  t
+}
 ```
 
 ```{r}
@@ -1739,85 +1826,97 @@ dim(GO_descriptions)
 # any(duplicated(GO_descriptions$go_id))
 ```
 
-
-```{r}
-clusterProfiler_bubble_plots <- function(df){
-  
-    input <- df %>% 
-      mutate(neg_log10_FDR=-log10(p.adjust)) %>% 
-      arrange(p.adjust)
-    
-    temp <- input %>% 
-      dplyr::filter(p.adjust < 0.05)
-  
-    if(nrow(temp) == 0){
-      temp <- input 
-    }
-    
-    n <- min(20,nrow(temp))
-    temp <- temp %>%  
-      mutate(ID=factor(ID, levels = rev(ID))) %>% 
-      dplyr::slice(1:n)
-    
-    bubble_plot <- ggplot(temp, aes(x=neg_log10_FDR, y=ID)) +
-      geom_point(aes(size=setSize, fill=ID), shape=21,
-                 alpha=0.8) +
-      scale_radius(range=c(1,10)) +
-      labs(x="-log10(adj. p-value)", y="") +
-      scale_y_discrete(expand = c(0.05,0)) +
-      theme(panel.grid.major.x = element_blank(),
-            panel.grid.minor.x = element_blank(),
-            panel.grid.major = element_line(color="black",size = 0.1),
-            panel.background = element_rect(fill="white"),
-            panel.border = element_rect(color="black", fill=NA)) +
-      guides(fill="none",
-             # size="none",
-             size=guide_legend(title = "Number of DEGs with GO Term",
-                               size = 1)
-             ) +
-      theme(legend.position = "left",
-            legend.key = element_rect(colour = NA, fill = NA))
-
-    # return(bubble_plot)
-    tab <-  ggplot(temp, aes(x = 0, y = ID, label=go_term_name, color=ontology)) +
-        geom_text(size = 3,
-                  hjust = 0,
-                  nudge_x = 0)  +
-        scale_y_discrete(expand = c(0.05,0)) +
-        scale_x_continuous(expand = expansion(mult = c(0,1e2))) +
-        coord_cartesian(clip="off",
-                        xlim=c(0, 500)) +
-        theme_void()
-
-    bubble_plot +
-      tab + 
-      plot_layout(widths = c(1, 2.5), guides='collect') &
-      theme(legend.position='top')
-    
-}
-```
-
-
 ```{r}
 d2_gsea_input <- day2_de %>% 
   pull(logFC, name=gene_id)
 
-day2_go_gsea <- GSEA(gene = d2_gsea_input, 
-                    TERM2GENE = dplyr::select(GO_annots,ID=go_id, gene=gene_id))
 
-day2_go_clean <- day2_go_gsea@result %>% 
-  left_join(., GO_descriptions, by=c("ID"="go_id")) %>% 
-  dplyr::select(ID,ontology:go_term_name, everything())
-
-dim(day2_go_clean)
-head(day2_go_clean)
-
-# write.csv(day2_go_clean, "GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv", row.names = FALSE)
+cats <- unique(GO_annots$ontology)
+D2_GSEA_objs <- purrr::map(cats, function(x){
+  
+    input_go_cats <- GO_annots %>% 
+      dplyr::filter(ontology==x) %>%
+      dplyr::select(ID=go_id, gene=gene_id)
+    
+    GSEA_res <- GSEA(gene = d2_gsea_input,
+                      TERM2GENE = input_go_cats,
+                      minGSSize = 5,
+                      maxGSSize = 600)
+})
+names(D2_GSEA_objs) <- cats
+# day2_go_gsea <- GSEA(gene = d2_gsea_input, 
+#                     TERM2GENE = dplyr::select(GO_annots,ID=go_id, gene=gene_id))
 ```
 
 ```{r}
-# pdf("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_AllOntology_bubblePlot.pdf")
-clusterProfiler_bubble_plots(day2_go_clean) 
+day2_go_clean <- purrr::map_dfr(D2_GSEA_objs, function(x) x@result) %>% 
+  left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
+  mutate(Direction=ifelse(NES>0, "Enriched_Day2","Enriched_SPZ")) %>% 
+  mutate(labels=case_when(
+    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1", go_term_name),
+    grepl("modulation", go_term_name) ~ gsub("^(.+) agg.+","\\1", go_term_name),
+    TRUE ~ go_term_name
+  )) %>% 
+  dplyr::select(ID,ontology:go_term_name, 
+                Direction,
+                pvalue, qvalues,
+                everything()) %>% 
+  dplyr::arrange(qvalues) 
+
+# day2_go_clean %>% filter(ontology == "Biological_Process")
+# table(day2_go_clean$Direction)
+# write.csv(day2_go_clean, "GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv", row.names = FALSE)
+```
+
+
+```{r}
+lab1 <- day2_go_clean %>% 
+  filter(ID=="GO:0006412") %>% 
+  mutate(label=paste(ID,go_term_name)) %>% 
+  pull(label)
+
+# svg("figures/combat_seq/barcode_plots/day2_vs_spz_ClusterProfiler_GO0006412_barcode.svg", height = 5, width = 10)
+bc1 <- gseaplot(D2_GSEA_objs$`Biological Process`, geneSetID = "GO:0006412", by="runningScore") +
+  labs(title=lab1)
+bc1
+# dev.off()
+ 
+lab2 <- day2_go_clean %>% 
+  filter(ID=="GO:0044409") %>% 
+  mutate(label=paste(ID,go_term_name)) %>% 
+  pull(label)
+
+# svg("figures/combat_seq/barcode_plots/day2_vs_spz_ClusterProfiler_GO0044409_barcode.svg", height = 5, width = 10)
+bc2 <- gseaplot(D2_GSEA_objs$`Biological Process`, geneSetID = "GO:0044409", by="runningScore") +
+  labs(title=lab2)
+bc2
+# dev.off()
+```
+
+```{r}
+layout <- "
+BCCC
+DDD#
+"
+
+d2_up <- day2_go_clean %>% 
+  filter(Direction == "Enriched_Day2") %>% 
+  clusterProfiler_bubble_plots(.,label = "labels")  +
+  labs(title = "GO Terms Enriched in Day 2")
+
+d2_down <- day2_go_clean %>%
+  filter(Direction == "Enriched_SPZ") %>%
+  clusterProfiler_bubble_plots(.,label = "labels") +
+  labs(title = "GO Terms Enriched in Sporozoite")
+
+# svg("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_bubblePlot_barcode_Day2.svg", height = 7, width = 10)
+d2_up + bc1 + 
+  plot_layout(design = layout) 
+# dev.off()
+
+# svg("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_bubblePlot_barcode_SPZ.svg", height = 7, width = 10)
+d2_down + bc2 + 
+  plot_layout(design = layout) 
 # dev.off()
 ```
 
@@ -1832,95 +1931,113 @@ purrr::map(unique(day2_go_clean$ontology), function(ont, df){
 })
 ```
 
- All values in the stats vector are greater than zero and scoreType is "std", maybe you should switch to scoreType = "pos"
  
 ```{r}
 cluster_go <- purrr::map(names(gene_clusts_dfs), function(clust){
   
-  
   gsea_input <- gene_clusts_dfs[[clust]] %>% 
     pull(gene_id)
-    # arrange(desc(R.squared)) %>% 
-    # pull(R.squared, name=gene_id)
   
-  if (all(gsea_input < 0) ){
-    type <- "neg"
-  }else if ( all(gsea_input > 0 )){
-    type <- "pos"
-  }else{
-    type <- "std"
-  }
-  
-  go_enr <- enricher(gene = gsea_input,
-                    TERM2GENE = dplyr::select(GO_annots,ID=go_id, gene=gene_id))
-  
-  go_enr_df <- go_enr@result %>%
-    left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
-    dplyr::select(ID,ontology:go_term_name,setSize=Count,
-           everything())
+  cats <- unique(GO_annots$ontology)
+  go_enr_df <- purrr::map_dfr(cats, function(x){
+      input_go_cats <- GO_annots %>% 
+        dplyr::filter(ontology==x) %>%
+        dplyr::select(ID=go_id, gene=gene_id)
+      go_enr <- enricher(gene = gsea_input,
+                        TERM2GENE = input_go_cats,
+                        minGSSize = 5,
+                        maxGSSize = 600)
+      if(!is.null(go_enr)){
+        go_enr@result
+      }
+  })
 
-  res <- list("go_gsea"=go_enr, "go_df"=go_enr_df)
-  return(res)
+  go_enr_df <- go_enr_df %>%
+    mutate(cluster_number=clust) %>% 
+    left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
+    dplyr::select(ID,cluster_number, ontology:go_term_name,setSize=Count,
+           everything()) %>% 
+    dplyr::select(ID:go_term_name,pvalue,qvalue,
+                everything()) %>% 
+    dplyr::arrange(pvalue)
+
+  
+  return(go_enr_df)
 })
 
 names(cluster_go) <- names(gene_clusts_dfs)
 ```
 
 ```{r}
-sapply(cluster_go, function(x) dim(x$go_df))
-# sapply(cluster_go, function(x) table(x$go_df$p.adjust < 0.05))
+sapply(cluster_go, dim)
+# lapply(cluster_go, head)
 ```
 
 ```{r}
-cluster_go_dfs <- purrr::map_dfr(names(cluster_go), function(x) cluster_go[[x]]$go_df %>% 
-                                   mutate(gene_cluster=x) %>% 
-                                   dplyr::select(gene_cluster, everything()))
+cluster_go_dfs <- bind_rows(cluster_go) %>% 
+  filter(qvalue < 0.2) %>% 
+  mutate(len=nchar(go_term_name)) %>% 
+  mutate(labels=case_when(
+    grepl("RNA polymerase", go_term_name) ~ gsub("RNA polymerase","RNApol",go_term_name),
+    grepl(".apurinic or apyrimidinic site.", go_term_name) ~ gsub(".apurinic or apyrimidinic site.","", go_term_name),
+    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1",go_term_name),
+    grepl("polyadenylation specificity factor complex", go_term_name) ~ gsub("polyadenylation specificity factor complex","CPSF", go_term_name),
+    grepl("calcium", go_term_name) ~ gsub("calcium-","Ca2+",go_term_name),
+    grepl("cellular protein", go_term_name) ~ gsub("cellular protein","", go_term_name),
+    grepl("-adenosylmethionine", go_term_name) ~ gsub("-adenosylmethionine","AMe",go_term_name),
+    TRUE ~ go_term_name
+  )) %>% 
+  dplyr::arrange(desc(len))
 
-head(cluster_go_dfs)
-# table(cluster_go_dfs$gene_cluster)
-
+head(cluster_go_dfs, n=20)
+# table(cluster_go_dfs$cluster_number)
 # write.csv(cluster_go_dfs, "GO_enrichment/time_course_clusters_clusterProfiler_allOntology.csv", row.names = FALSE)
 ```
 
 ```{r}
 cluster_go_dfs %>% 
-  group_by(gene_cluster) %>% 
-  mutate(FDR_sig_result=p.adjust < 0.05) %>% 
+  group_by(cluster_number) %>% 
+  mutate(FDR_sig_result=p.adjust < 0.2) %>% 
   group_by(FDR_sig_result, .add=TRUE) %>% 
-  dplyr::count() %>% 
-  # write.csv(.,"GO_enrichment/time_course_clusters_clusterProfiler_SigResults_Summary.csv", row.names = FALSE)
+  dplyr::count()  %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = FDR_sig_result,
+              values_from = n) %>% 
+  rename_at(c("FALSE","TRUE"), ~c("GO_terms_qvalue<0.2","GO_terms_qvalue>0.2"))  %>% 
+  left_join(., data.frame(Genes_in_Cluster=gene_clusts_dfs %>% 
+                            sapply(., nrow)) %>% 
+              rownames_to_column("cluster_number"), 
+            by="cluster_number")
+ 
+# write.csv(.,"GO_enrichment/time_course_clusters_clusterProfiler_SigResults_Summary.csv", row.names = FALSE)
 ```
 
-
 ```{r}
-purrr::map(names(cluster_go_gsea), function(clust){
-  df <- cluster_go_gsea[[clust]]$go_df %>% 
-          mutate_at(vars(ontology), ~case_when(
-                    .=="N/A" ~ "unknown",
-                    TRUE ~ .))
+purrr::map(names(cluster_go), function(clust){
+  df <- cluster_go_dfs %>% 
+    filter(cluster_number == clust) %>% 
+    filter(ontology != "N/A", qvalue < 0.2) %>% 
+    mutate(setSize=as.integer(setSize)) %>% 
+    dplyr::arrange(pvalue)
   
-  for (ont in unique(df$ontology)){
-    subset <- df %>% 
-      filter(ontology == ont)
-    pdf(paste0("figures/combat_seq/bubble_plots/",clust,"_ClusterProfiler_",ont,"_bubblePlot.pdf"),
-        height = 5, width = 8)
-    print(clusterProfiler_bubble_plots(subset))
-    dev.off()
-  }
-  
+    # pdf(paste0("figures/combat_seq/bubble_plots/",clust,"_ClusterProfiler_bubblePlot.pdf"), height = 5, width = 8)
+    print(clusterProfiler_bubble_plots(df,pval_column = "pvalue",label = "labels", Filter=FALSE) +
+      plot_annotation(title = paste0("Timecourse Cluster ",clust)))
+    # dev.off()
 })
 ```
 
-
 ```{r}
 top_paths <- cluster_go_dfs %>% 
-   mutate(neg_log10_FDR=-log10(p.adjust),
-          neg_log10_P=-log10(pvalue)) %>% 
-  group_by(gene_cluster) %>% 
-  filter(p.adjust < 0.05 | pvalue < 0.05) %>% 
-  arrange(desc(neg_log10_FDR), .by_group = TRUE) %>% 
+   mutate(neg_log10_q=-log10(qvalue),
+          neg_log10_p=-log10(pvalue)) %>% 
+  group_by(cluster_number) %>% 
+  dplyr::filter( qvalue < 0.2 ) %>% 
+  # filter(p.adjust < 0.05 | pvalue < 0.05) %>% 
+  dplyr::arrange(desc(neg_log10_q), .by_group = TRUE) %>% 
   dplyr::slice(1:10) %>% 
   ungroup() %>% 
+  dplyr::filter(ontology != "N/A") %>% 
   mutate(ID=factor(ID, levels=unique(ID)),
          text_color=case_when(
            ontology=="Cellular_Component" ~ "green4",
@@ -1932,16 +2049,17 @@ top_paths <- cluster_go_dfs %>%
 head(top_paths)
 # table(duplicated(top_paths$ID))
 # table(top_paths$text_color)
+table(top_paths$cluster_number)
 ```
 
 ```{r fig.width=12, fig.height=6}
- bubble_plot <- ggplot(top_paths, aes(x=neg_log10_P, y=ID)) +
+ bubble_plot <- ggplot(top_paths, aes(x=neg_log10_p, y=ID)) +
       geom_point(aes(size=setSize, fill=ID), shape=21,
                  alpha=0.8) +
       scale_radius(range=c(2,10)) +
       labs(x="-log10(p-value)", y="") +
       scale_y_discrete(expand = c(0.05,0.05)) +
-      scale_x_discrete(expand = c(0.05,0.05)) +
+      scale_x_continuous(expand = c(0.05,0.05)) +
   
       theme(panel.grid.major.x = element_blank(),
             axis.text.y = element_text(color=top_paths$text_color),
@@ -1950,18 +2068,196 @@ head(top_paths)
             panel.background = element_rect(fill="white"),
             panel.border = element_rect(color="black", fill=NA)) +
       guides(fill="none",
-             size=guide_legend(title = "Number of DEGs with GO Term",
+             size=guide_legend(title = "Number of Genes",
                                size = 1)
              ) +
       theme(legend.position = "left",
             legend.key = element_rect(colour = NA, fill = NA))
 
 
-svg("figures/combat_seq/bubble_plots/time_course_facet_plot_allOntology.svg", width = 15, height = 7)
+# svg("figures/combat_seq/bubble_plots/time_course_facet_plot_allOntology.svg", width = 15, height = 7)
 bubble_plot +
-  facet_wrap(~gene_cluster, scales = 'free', ncol = 5)
-dev.off()
+  facet_wrap(~cluster_number, scales = 'free', ncol = 5)
+# dev.off()
 
+```
+
+## TopGO 
+
+https://bioconductor.org/packages/devel/bioc/vignettes/topGO/inst/doc/topGO.pdf
+
+```{r}
+#  loaded three environments GOBPTerm, GOMFTerm and GOCCTerm
+suppressPackageStartupMessages(library(topGO))
+```
+
+topGO_2.46.0 (current 2.5.0, but how current are the GO annots themselves??)
+
+```{r}
+go_terms_avail <- c(ls(GOBPTerm),ls(GOMFTerm),ls(GOCCTerm))
+# length(go_terms_avail)
+# length(unique(go_terms_avail))
+table(unique(GO_annots$go_id) %in% go_terms_avail)
+missing <- unique(setdiff(GO_annots$go_id, go_terms_avail)) #46 missing 
+
+GO_annots %>% 
+  filter(go_id %in% missing) %>%
+  dplyr::select(ontology, go_id) %>% 
+  distinct() %>% 
+  arrange(ontology) 
+
+length(unique(GO_annots$gene_id)) #4,868
+length(unique(GO_annots$go_id)) #3230
+
+table(gene_clusts_dfs$cluster8$gene_id %in% unique(GO_annots$gene_id))
+table(all_genes %in% unique(GO_annots$gene_id))
+```
+
+```{r}
+gene2GO <- GO_annots %>% pull(go_id,name=gene_id)
+
+topGO_eset <- cb_eset
+masigpro_id <- pData(topGO_eset) %>% 
+  group_by(time_point) %>% 
+  mutate(masigpro_id=paste("Pf",  time_point, 
+                           paste0("Rep", 1:n()), sep="_")) %>% 
+  ungroup() %>% 
+  pull(masigpro_id)
+
+pData(topGO_eset)$masigpro_id <- masigpro_id
+colnames(topGO_eset) <- masigpro_id
+topGO_eset <- topGO_eset[,!grepl("Day2", colnames(topGO_eset))]
+```
+
+```{r}
+all_genes <- fData(topGO_eset) %>% pull(gene_id)
+gene_list <- as.numeric(all_genes %in% gene_clusts_dfs$cluster8$gene_id , 1,0) %>% 
+  as.factor() %>% 
+  set_names(all_genes)
+
+# table(gene_list)
+
+godata_BP <- new("topGOdata", 
+              ontology = c("BP"), 
+              nodeSize = 5,
+              allGenes = gene_list,
+              annot = annFUN.gene2GO, 
+              gene2GO = gene2GO)
+
+# godata_BP
+```
+
+
+```{r}
+whichTests()
+whichAlgorithms()
+```
+
+## goseq
+
+```{r}
+library(goseq)
+library(GenomicRanges)
+conflicted::conflict_prefer("select", "dplyr")
+conflicted::conflict_prefer("filter", "dplyr")
+conflicted::conflict_prefer("mutate", "dplyr")
+```
+
+```{r message=FALSE}
+edb <- ensembldb::EnsDb("species_genomes/GRCh38_GRCm39_Pf3D7v58.sqlite")
+edb
+```
+
+```{r}
+genes_gr <- ensembldb::genes(edb)[rownames(cb_se),]
+genes_gr %>%  head()
+# length(genes_gr) #5188
+
+gene_lens <- width(genes_gr) %>% 
+  set_names(names(genes_gr))
+```
+
+```{r}
+all_genes <- rownames(cb_se)
+gene_list <- as.numeric(all_genes %in% gene_clusts_dfs$cluster8$gene_id , 1,0) %>% 
+  as.factor() %>% 
+  set_names(all_genes)
+
+table(gene_list)
+```
+
+```{r}
+supportedGenomes() %>% 
+  filter(grepl("mal|plas|fal", species, ignore.case = T) | 
+           grepl("PF", db, ignore.case = TRUE))
+# supportedOrganisms()
+supportedGeneIDs() %>%  head()
+```
+
+Warning: initial point very close to some inequality constraintsWarning: collapsing to unique 'x' values
+
+```{r}
+GO_annots_clean <- GO_annots %>% 
+  group_by(ontology,go_id) %>% 
+  dplyr::mutate(n_genes = n())  %>% 
+  ungroup() %>% 
+  select(gene_id:go_id, n_genes) %>% 
+  dplyr::arrange(ontology, go_id,n_genes) %>% 
+  dplyr::filter(n_genes >= 5, n_genes <= 1000)
+
+GO_annots_clean %>% 
+  select(ontology, go_id) %>% 
+  distinct() %>% 
+  group_by(ontology) %>% 
+  dplyr::count()
+```
+
+```{r}
+GO_annots %>% 
+  filter(ontology=="Biological Process") %>% 
+  select(gene=gene_id,go_id)
+```
+
+
+```{r}
+input_go <- 
+  GO_annots_clean %>%
+  filter(ontology=="Biological Process") %>% 
+  dplyr::arrange(gene_id) %>% 
+  select(gene=gene_id,go_id) %>% 
+  as.data.frame()
+
+
+pwf <- nullp(DEgenes = gene_list, 
+             genome = "PF3D7",
+             id = "ensGene",
+             bias.data = gene_lens)
+```
+
+```{r}
+go_res <- goseq(pwf, 
+                genome = "PF3D7",
+                id = "ensGene",
+                gene2cat = input_go, 
+                method = "Wallenius",
+                # method = "Sampling",
+                repcnt = 2000,
+                use_genes_without_cat = F)
+```
+
+Error: node stack overflow
+Error during wrapup: node stack overflow
+Error: no more error handlers available (recursive errors?); invoking 'abort' restart
+
+```{r}
+go_res_clean <- go_res %>% 
+  as.data.frame() %>% 
+  dplyr::mutate(p_adj = p.adjust(p = as.numeric(over_represented_pvalue),
+                                 method = "BH")) %>% 
+  dplyr::select(category, p_adj, everything())
+
+# quantile(go_res_clean$p_adj)
+go_res_clean
 ```
 
 

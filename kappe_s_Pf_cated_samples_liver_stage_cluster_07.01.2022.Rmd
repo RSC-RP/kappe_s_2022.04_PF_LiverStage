@@ -490,10 +490,17 @@ STAR aligner:
 https://childrens-atlassian/bitbucket/projects/RSC/repos/kappe_s_2022.04_rnaseq_quant/browse?at=refs%2Fheads%2Fkappe_s_2022.06 
 
 ```{bash}
-data_processing_path="/active/taylor_s/people/jsmi26/RSC/kappe_s_2022.04_rnaseq_quant"
+data_processing_path="/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant"
 rsync -av $data_processing_path/qc_data .
 rsync -av $data_processing_path/raw_counts .
+rsync -av $data_processing_path/normalized_counts/ ./expression_data/
 rsync -av $data_processing_path/samples .
+```
+
+```{bash}
+data_processing_path="/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant"
+ln -svf $data_processing_path/species_genomes .
+#ln -svf $data_processing_path/ .
 ```
 
 # Sample Info
@@ -571,7 +578,7 @@ dim(sample_manifest_cated)
 ```
 
 ```{r}
-mapping_stats <- read.csv("raw_counts/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_counts_stats.csv")  %>% 
+mapping_stats <- read.csv("qc_data/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_counts_stats.csv")  %>% 
   rename_at(vars(gene_name), ~c("gene_id")) %>% 
   select(all_of(c("gene_id", sample_manifest_cated$sample_id_cat))) 
 
@@ -603,8 +610,6 @@ TMMCPM_all <- as.data.frame(edgeR::cpm(dge_all,normalized.lib.sizes = TRUE, log=
 
 dim(TMMCPM_all)  #27711    31
 head(TMMCPM_all[,1:5])
-
-# write.csv(rownames_to_column(TMMCPM_all,"gene_name"), "expression_data/kappe_s_PfHsMmu_cated_samples_TMM_CPM.csv", row.names = FALSE)
 ```
 
 ```{r}

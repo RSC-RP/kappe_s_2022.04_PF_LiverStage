@@ -543,7 +543,7 @@ sra_run_table <- read.csv("samples/SraRunTable.txt") %>%
          read_length=as.character(AvgSpotLen),
          platform=Instrument,
          parasite_species="Plasmodium falciparum",
-         read1_fastq=dir(file.path(ACTIVE,"taylor_s/people/jsmi26/RSC/kappe_s_2022.04_rnaseq_quant/results/sratools"), 
+         read1_fastq=dir(file.path(ACTIVE,"taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/results/sratools"), 
                          pattern = "*.gz"), 
          read2_fastq="") %>% 
   select(sample_id_cat=Run, RNA_label:read2_fastq)
@@ -685,12 +685,13 @@ rm(keep)
 exprs <- Biobase::ExpressionSet(assayData=log2(pf_sel_CPM+1),
                                 phenoData = Biobase::AnnotatedDataFrame(pf_samples),
                                 featureData = Biobase::AnnotatedDataFrame(pf_genes[rownames(pf_sel_CPM),]),
-                                annotation="Pf3D7v58")
+                                annotation="Pf3D7v58 log2 TMM CPM")
 
 
 exprs
 # saveRDS(exprs, "expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_expressionSet.RDS")
 ```
+
 
 # Uncorrected Counts 
 
@@ -841,7 +842,7 @@ cb_SE
 cb_eset <- Biobase::ExpressionSet(assayData=cpm(pf_combat_dge, log=TRUE, prior.count = 1),
                                 phenoData = Biobase::AnnotatedDataFrame(pf_samples),
                                 featureData = Biobase::AnnotatedDataFrame(pf_genes[rownames(pf_combat_dge),]),
-                                annotation="Pf3D7v58")
+                                annotation="Pf3D7v58 log2 TMM CPM")
 
 
 cb_eset
@@ -1188,6 +1189,154 @@ plt_varexp_full
 # dev.off()
 ```
 
+# Absent Expression 
+
+Number of genes detected in day 6 not detected at day 2
+
+Number of genes detection in day 6 not in spz
+
+```{r}
+CPM_long <- assay(cb_SE,"cpm") %>% 
+  as.data.frame() %>%  
+  rownames_to_column("gene_id") %>%
+  pivot_longer(cols= -gene_id, 
+               names_to = "sample_id_cat", 
+               values_to = "CPM") %>% 
+  left_join(., as.data.frame(colData(cb_SE)), 
+            by="sample_id_cat") 
+```
+
+```{r}
+exprs_long <- exprs(exprs) %>% 
+  as.data.frame() %>%  
+  rownames_to_column("gene_id") %>%
+  pivot_longer(cols= -gene_id, 
+               names_to = "sample_id_cat", 
+               values_to = "log2(CPM+1)") %>% 
+  left_join(., as.data.frame(pData(exprs)), 
+            by="sample_id_cat") 
+
+# exprs_long
+```
+
+
+## Day 6 vs SPZ 
+
+```{r}
+day6_vs_spz <- CPM_long %>% 
+  filter(time_point == "Day6" | time_point == "Day0") %>% 
+  group_by(gene_id,time_point) %>%
+  arrange(gene_id) %>% 
+  group_by(gene_id, time_point) %>% 
+  mutate(Number_Expressing=sum(CPM >= 1)) %>% 
+  ungroup() %>% 
+  select(gene_id:CPM, time_point, Number_Expressing, 
+         everything()) 
+
+sel_genes <- day6_vs_spz %>% 
+  select(gene_id,time_point, Number_Expressing) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = time_point, 
+              values_from = Number_Expressing) %>% 
+  filter(Day6 >= 2, Day0 <= 1) %>% 
+  arrange(desc(Day6), Day0)
+
+day6_vs_spz <- day6_vs_spz %>% 
+  filter(gene_id %in% sel_genes$gene_id) %>% 
+  group_by(gene_id) %>% 
+  mutate(category=case_when(
+    all(CPM[time_point == "Day0"] == 0) ~ "absent day0", 
+    sum( CPM[time_point == "Day0"] == 0 ) >= 4  ~ "low day0",
+    TRUE ~ "expressed in SPZ"
+  )) %>% 
+  ungroup() %>% 
+  group_by(gene_id, time_point) %>% 
+  # redefine this column after initial filtering to be > 0 for SPZ 
+  mutate(Number_Expressing=ifelse(time_point=="Day0", sum(CPM > 0), Number_Expressing)) %>% 
+  ungroup() %>% 
+  select(gene_id:CPM, time_point,
+         Number_Expressing, category,
+         everything()) %>%
+  filter(category != "expressed in SPZ") %>% 
+  arrange(category, gene_id)
+
+# day6_vs_spz
+dim(day6_vs_spz)
+length(unique(day6_vs_spz$gene_id))
+# table(day6_vs_spz$category)
+```
+
+```{r}
+summary_stats <- day6_vs_spz %>%
+  group_by(category, gene_id,time_point) %>% 
+  summarise(Number_Samples_Expressing=sum( CPM > 0),
+            mean=mean(CPM),
+            median=median(CPM), 
+            sd=sd(CPM)) 
+
+summary_stats
+# write.csv(summary_stats, "DEGs/absent_expression/genes_day6_with_low_absent_expression_spz.csv", row.names = FALSE)
+```
+
+```{r}
+tab <- day6_vs_spz %>% 
+  select(gene_id,time_point, Number_Expressing, category) %>% 
+  distinct()
+
+tab %>% view()
+# write.csv(tab,"DEGs/absent_expression/genes_day6_with_low_absent_expression_spz.csv", row.names = FALSE)
+```
+
+```{r}
+unadj <- exprs_long %>% 
+  filter(time_point == "Day6" | time_point == "Day0") %>% 
+  left_join(., select(tab, gene_id, category) %>% 
+              distinct(),
+            by="gene_id") %>% 
+  filter(gene_id %in% day6_vs_spz$gene_id)
+
+unadj %>% dim()
+# length(unique(unadj$gene_id))
+```
+
+```{r}
+# pdf("figures/combat_seq/genes_combat-seq_expressed_at_day6_absent_SPZ.pdf", height = 5, width = 7)
+ggplot(day6_vs_spz,
+       aes(x=time_point,
+                  y=log2(CPM+1),
+                  fill=time_point)) +
+  geom_violin(alpha=0.3, scale="width",
+              draw_quantiles = c(0.25,0.5,0.75),
+              # outlier.colour = NA
+              ) +
+  geom_point(aes(color=time_point),
+             position = position_jitterdodge()) +
+  scale_color_viridis_d(begin = 0.2, end = 0.8) +
+  scale_fill_viridis_d(begin = 0.2, end = 0.8) +
+  facet_wrap(~category) +
+  theme_classic() +
+  theme(legend.position = 'none')
+# dev.off()
+```
+
+```{r}
+# pdf("figures/uncorrected/genes_expressed_at_day6_absent_SPZ.pdf", height = 5, width = 7)
+ggplot(unadj, aes(x=time_point,
+                  y=`log2(CPM+1)`,
+                  fill=time_point)) +
+  geom_violin(draw_quantiles = 0.5, scale = "width",
+              alpha=0.5) +
+  # geom_boxplot(alpha=0.3, outlier.colour = NA) +
+  geom_point(aes(color=time_point),
+             position = position_jitterdodge()) +
+  facet_wrap(~category) +
+  scale_color_viridis_d(begin = 0.2, end = 0.8) +
+  scale_fill_viridis_d(begin = 0.2, end = 0.8) +
+  theme_classic()
+# dev.off()
+```
+
+
 # SVA
 
 https://bioconductor.org/packages/release/bioc/vignettes/sva/inst/doc/sva.pdf
@@ -1291,11 +1440,12 @@ contrast.matrix
 I think I need to consider best practices here... not sure yet. 
 
 ```{bash}
-rsync -av figures /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
-rsync -av expression_data /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
-rsync -av presentations /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
-rsync -av DEGs /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
-cp limma_column_descriptions.xlsx /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+DEST="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage"
+rsync -av figures $DEST
+rsync -av expression_data $DEST
+rsync -av presentations $DEST
+rsync -av DEGs $DEST
+cp limma_column_descriptions.xlsx $DEST
 ```
 
 

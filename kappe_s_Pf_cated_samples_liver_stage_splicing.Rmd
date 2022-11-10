@@ -215,8 +215,9 @@ megadepth::bam_to_bigwig(bam_file = infile,
                          prefix = in_prefix,
                          overwrite = TRUE)
 ```
+
 ```{r}
-system(paste("ls", grep("Day6.GFP_L1Pf6xTR2_L1Pf6_S5", outbams, value=TRUE))
+system(paste("ls", grep("Day6.GFP_L1Pf6xTR2_L1Pf6_S5", outbams, value=TRUE)))
 ```
 
 
