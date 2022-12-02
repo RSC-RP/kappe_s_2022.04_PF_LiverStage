@@ -1885,8 +1885,8 @@ GO_annots <- read.delim("expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_v58
   janitor::clean_names()
 
 head(GO_annots)
-# dim(GO_annots) #37,841    11
-table(GO_annots$ontology)
+dim(GO_annots) #37,841    11
+# table(GO_annots$ontology)
 ```
 
 ```{r}
@@ -1898,6 +1898,25 @@ GO_descriptions <- GO_annots %>%
 dim(GO_descriptions)
 # any(duplicated(GO_descriptions$go_id))
 GO_descriptions$ontology %>%  unique()
+```
+
+```{r}
+GO_annots_filtered <- GO_annots %>% 
+  group_by(ontology, go_id) %>% 
+  mutate(N=n()) %>% 
+  ungroup() %>% 
+  arrange(go_id) %>% 
+  filter(N>=5, N<=600) %>% 
+  select(gene_id, ontology, go_id, N)
+
+GO_annots_filtered
+# write.csv(GO_annots_filtered,"expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_filteredSetSizes_v58.txt", row.names = F)
+
+GO_annots_filtered %>% 
+  select(ontology, go_id) %>% 
+  distinct() %>% 
+  group_by(ontology) %>% 
+  dplyr::count()
 ```
 
 
@@ -2003,8 +2022,6 @@ D2_GSEA_objs <- purrr::map(cats, function(x){
                       maxGSSize = 600)
 })
 names(D2_GSEA_objs) <- cats
-# day2_go_gsea <- GSEA(gene = d2_gsea_input, 
-#                     TERM2GENE = dplyr::select(GO_annots,ID=go_id, gene=gene_id))
 ```
 
 ```{r}
@@ -2016,11 +2033,11 @@ day2_go_clean <- purrr::map_dfr(D2_GSEA_objs, function(x) x@result) %>%
     grepl("modulation", go_term_name) ~ gsub("^(.+) agg.+","\\1", go_term_name),
     TRUE ~ go_term_name
   )) %>% 
-  dplyr::select(ID,ontology:go_term_name, 
+  dplyr::select(ID,ontology:go_term_name,
                 Direction,
                 pvalue, qvalues,
                 everything()) %>% 
-  dplyr::arrange(qvalues) 
+  dplyr::arrange(qvalues)
 
 # day2_go_clean %>% filter(ontology == "Biological_Process")
 # table(day2_go_clean$Direction)
@@ -2238,7 +2255,6 @@ table(top_paths$cluster_number)
 bubble_plot +
   facet_wrap(~cluster_number, scales = 'free', ncol = 5)
 # dev.off()
-# 
 ```
 
 

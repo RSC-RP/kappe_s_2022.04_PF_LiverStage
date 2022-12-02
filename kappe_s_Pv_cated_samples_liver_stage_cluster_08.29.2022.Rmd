@@ -525,6 +525,71 @@ voom_de <- function(expnData, pheno,
 }
 ```
 
+```{r}
+clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
+                                         label="go_term_name",Filter=TRUE){
+    
+    column <- glue::glue("Neg_log10_{pval_column}")
+    temp <- data.frame()
+    input <- df %>% 
+      dplyr::mutate( !!column := -log10(!!as.name(pval_column)))
+    
+    if(Filter){
+      temp <- input %>%
+        dplyr::filter( !!as.name(pval_column) < 0.05)
+    }
+    
+    if (nrow(temp) == 0){
+        temp <- input
+    }
+
+    n <- min(10,nrow(temp))
+    temp <- temp %>%
+      mutate(ID=factor(ID, levels = rev(ID))) %>%
+      dplyr::slice(1:n)
+
+    bubble_plot <- ggplot(temp,
+                          aes_string(x=column,
+                                     y="ID")) +
+      geom_point(aes(size=setSize, fill=ID), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(1,10)) +
+      labs(x=glue::glue("-log10({pval_column})"), y="") +
+      scale_y_discrete(expand = c(0.1,0)) +
+      scale_x_continuous(expand = c(0.15,0)) +
+      guides(fill="none",
+             size=guide_legend(title = "Number of Genes",
+                               size = 1)) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA),
+            plot.title = element_text(hjust = 0),
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) 
+
+
+    tab <-  ggplot(temp, aes_string(x = "0", y = "ID", 
+                             label=label, 
+                             color="ontology")) +
+        geom_text(size = 4,
+                  hjust = 0,
+                  nudge_x = 0)  +
+        scale_y_discrete(expand = c(0.1,0)) +
+        scale_color_manual(values=c("Biological_Process"="tomato","Cellular_Component"="forestgreen",
+                                    "Molecular_Function"="dodgerblue","N/A"="grey")) +
+        # scale_x_continuous(expand = c(0,1)) +
+        scale_x_continuous(expand = expansion(mult = c(0,0.01))) +
+        theme_void()
+
+    bubble_plot +
+      tab +
+      plot_layout(widths = c(1, 2.5), guides='collect') &
+      theme(legend.position='left')
+    
+}
+```
 
 # Data locations
 
@@ -547,6 +612,12 @@ pvivax_manifest <- read.csv("samples/kappe_s_2022.08_pvivax_erika.pv.hypnozoites
 head(pvivax_manifest)
 ```
 
+```{r}
+pf_manifest <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sample_manifest_7.25.2022.csv")
+
+head(pf_manifest)
+```
+
 # Gene Counts 
 
 ```{r}
@@ -561,7 +632,7 @@ dim(counts_matrix_cated)
 ```
 
 ```{r}
-mapping_stats <- read.csv("raw_counts/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_counts_stats.csv")  %>% 
+mapping_stats <- read.csv("qc_data/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_counts_stats.csv")  %>% 
   rename_at(vars(gene_name), ~c("gene_id")) %>% 
   rename_all(~gsub("\\.", "", .)) %>% 
   select(all_of(c("gene_id", pvivax_manifest$sample_id))) 
@@ -589,12 +660,22 @@ pf_species_genes <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_gen
 ```
 
 ```{r}
-orthologs <- read.csv("expression_data/PVP01_PF3D7_GenesByOrthologs_Summary.csv") %>% 
+orthologs <- read.csv("expression_data/gene_annots/PVP01_PF3D7_GenesByOrthologs_Summary.csv") %>% 
   janitor::clean_names() %>% 
   filter(!duplicated(gene_id))
 
 head(orthologs)
 dim(orthologs) #4485   10
+```
+
+```{r}
+pv_orthologs <- read.csv("expression_data/gene_annots/PF3D7_PVP01_GenesByOrthologs_Summary.csv") %>% 
+    janitor::clean_names() %>% 
+    filter(!duplicated(gene_id))
+
+
+head(pv_orthologs)
+# dim(pv_orthologs) #4564    8
 ```
 
 ```{r}
@@ -613,7 +694,22 @@ dim(orthologs) #4485   10
 #               row.names = FALSE, col.names = FALSE, quote=FALSE)
 ```
 
+
 # Counts and Normalization 
+
+```{r}
+pv_TPM <- read.csv("expression_data/kappe_s_PvHsMmu_PVP01_TPM.csv")
+
+# dim(pv_TPM) #6861
+head(pv_TPM)
+```
+
+```{r}
+pf_TPM <- read.csv("expression_data/kappe_s_PfHsMmu_PF3D7_TPM.csv")
+
+# dim(pf_TPM) #5720   64
+head(pf_TPM)
+```
 
 ```{r}
 dge_all <- edgeR::DGEList(counts=counts_matrix_cated[,-1])
@@ -625,8 +721,6 @@ TMMCPM_all <- as.data.frame(edgeR::cpm(dge_all,normalized.lib.sizes = TRUE, log=
 
 dim(TMMCPM_all)
 head(TMMCPM_all[,1:5])
-
-# write.csv(rownames_to_column(TMMCPM_all,"gene_name"), "expression_data/kappe_s_PfHsMmu_cated_samples_TMM_CPM.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -664,8 +758,6 @@ head(pv_TMMCPM[,1:5])
 #these norm factors WAYY inflated tbh
 # pv_dge$samples %>% 
 #   bind_cols(pvivax_manifest$group)
-
-# write.csv(pv_TMMCPM,"expression_data/kappe_s_PVP01_genes_cated_samples_TMM_CPM.csv")
 ```
 
 ```{r}
@@ -1026,6 +1118,7 @@ create_pv_heatmaps(TMMCPM=pv_expression$TMMCPM,
 
 # Compare to P. Falciparum 
 
+## DEGS 
 
 ```{r}
 library(UpSetR)
@@ -1155,9 +1248,276 @@ Pf_day6_PI4K_upset <- Pf_day6_PI4K %>%
         sets.x.label = "Total Number of Genes\n Per Set",
         mainbar.y.label = "Number of Genes\n Overlapping")
 
-pdf("figures/pfalciparum_day6_vs_pvivax_control_ortholog_overlap_upset.pdf", height = 7, width = 10)
+# pdf("figures/pfalciparum_day6_vs_pvivax_control_ortholog_overlap_upset.pdf", height = 7, width = 10)
 Pf_day6_PI4K_upset
-dev.off()
+# dev.off()
+```
+
+## Total Expression
+
+```{r}
+pf_D6 <- pf_manifest %>% 
+  filter(time_point=="Day6") %>% 
+  mutate(analysis_group_id=gsub("\\+","",analysis_group_id)) %>% 
+  pull(sample_id_cat, name=analysis_group_id)
+
+pf_TPM_D6 <- pf_TPM[,c("gene_name",pf_D6)] %>% 
+  select(gene_id=gene_name, all_of(pf_D6)) %>% 
+  left_join(., pf_species_genes, by="gene_id") %>%
+  select(-c(seqnames:symbol)) %>% 
+  left_join(., orthologs, by="gene_id") %>% 
+  
+  group_by(gene_id) %>% 
+  mutate(expression_category = ifelse(all(c_across(Day6_Heps_S1_Pf:Day6_Heps_S3_Pf) > 1), "expressed", "non-expressed")) %>% 
+  ungroup() %>% 
+  
+  mutate(number_mapped_orthologs=str_count(input_ortholog_s, pattern = ",")+1) %>% 
+  mutate_at(vars(number_mapped_orthologs), ~ifelse(is.na(.), 0, .)) %>% 
+  mutate(multiple_mapped_orthologs=number_mapped_orthologs > 1) %>% 
+  
+  select(gene_id,p_vivax_ortholog=input_ortholog_s,
+         expression_category,
+         Day6_Heps_S1_Pf:description,
+         number_mapped_orthologs,number_mapped_orthologs)
+
+
+# pf_TPM_D6
+dim(pf_TPM)
+dim(pf_TPM_D6)
+
+table(pf_TPM_D6$number_mapped_orthologs) %>% 
+  .[names(.)!=0] %>% 
+  sum()
+
+# 4485/nrow(pf_TPM_D6)
+```
+
+```{r}
+pv_D8 <- pvivax_manifest %>% 
+  filter(group=="Cont") %>% 
+  mutate(analysis_group_id=paste(time_point,"Heps",paste0("S",1:n()),"Pv", sep="_")) %>% 
+  pull(sample_id, name=analysis_group_id)
+
+pv_TPM_D8 <- pv_TPM[,c("gene_name",pv_D8)] %>% 
+  select(gene_id=gene_name, all_of(pv_D8)) %>% 
+  left_join(., species_genes, by="gene_id") %>%
+  select(-c(seqnames:symbol)) %>% 
+  left_join(., pv_orthologs, by="gene_id") %>%
+
+  group_by(gene_id) %>%
+  mutate(expression_category = ifelse(all(c_across(Day8_Heps_S1_Pv:Day8_Heps_S3_Pv) > 1), "expressed", "non-expressed")) %>%
+  ungroup() %>%
+  
+  mutate(number_mapped_orthologs=str_count(input_ortholog_s, pattern = ",")+1) %>% 
+  mutate_at(vars(number_mapped_orthologs), ~ifelse(is.na(.), 0, .)) %>% 
+  mutate(multiple_mapped_orthologs=number_mapped_orthologs > 1) %>% 
+  
+  select(gene_id,p_falciparum_ortholog=input_ortholog_s,
+         expression_category,
+         Day8_Heps_S1_Pv:description,
+         number_mapped_orthologs,number_mapped_orthologs)
+
+dim(pv_TPM)
+dim(pv_TPM_D8)
+```
+
+```{r}
+h1 <- ggplot(pf_TPM_D6, aes(x=number_mapped_orthologs)) +
+  geom_histogram(binwidth = 1, fill=viridis::viridis(n = 1,begin = 0.8),
+                 color="grey50") +
+  scale_x_continuous(breaks=c(seq(0,3,by=1), seq(6, 30,by=3))) +
+  labs(y="Number of Genes\nwith Orthologs",x="Number of Orthologs", title="P.falciparum Genome") +
+  theme_classic()
+
+h2 <- ggplot(pv_TPM_D8, aes(x=number_mapped_orthologs)) +
+  geom_histogram(binwidth = 1, fill=viridis::viridis(n = 1, begin=0.4),
+                 color="grey") +
+  scale_x_continuous(breaks=c(seq(0,3,by=1), seq(6, 30,by=3))) +
+  labs(y="Number of Genes\nwith Orthologs", x="Number of Orthologs",title = "P.vivax Genome") +
+  theme_classic()
+
+# svglite("figures/uncorrected/pvivax_vs_pfalciparum_orthologs_histogram.svg", height = 5, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+h1 + h2
+# dev.off()
+```
+
+```{r}
+pv_exp <- pv_TPM_D8 %>% 
+  filter(expression_category=="expressed", !is.na(p_falciparum_ortholog)) %>% 
+  pull(p_falciparum_ortholog)
+
+pf_exp <- pf_TPM_D6 %>% 
+  filter(expression_category=="expressed", !is.na(p_vivax_ortholog)) %>% 
+  pull(gene_id)
+
+ortholog_list <- list(pv_expressed=pv_exp,
+                      pf_expressed=pf_exp)
+
+both <- intersect(pv_exp,pf_exp)
+pf_only <- setdiff(pf_exp,pv_exp)
+pv_only <- setdiff(pv_exp,pf_exp)
+
+sapply(list(both,pv_only,pf_only), length)
+```
+
+```{r}
+pf_TPM_D6 <- pf_TPM_D6 %>% 
+  mutate(ortholog_expression_category=case_when(
+    gene_id %in% both ~ "both",
+    gene_id %in% pf_only ~ "pf_only",
+    gene_id %in% pv_only ~ "pv_only"
+  )) %>% 
+  arrange(ortholog_expression_category) %>% 
+  select(gene_id, p_vivax_ortholog, ortholog_expression_category,
+         Day6_Heps_S1_Pf:gene_name, everything()) 
+
+# write.csv(pf_TPM_D6, "pvivax_vs_pfalciparum/pfalciparum_day6_orthologs_TPM.csv",row.names = FALSE)
+
+pv_TPM_D8 <- pv_TPM_D8 %>% 
+  mutate(ortholog_expression_category=case_when(
+    p_falciparum_ortholog %in% both ~ "both",
+    p_falciparum_ortholog %in% pf_only ~ "pf_only",
+    p_falciparum_ortholog %in% pv_only ~ "pv_only"
+  )) %>% 
+  arrange(ortholog_expression_category) %>% 
+  select(gene_id, p_falciparum_ortholog, ortholog_expression_category,
+         Day8_Heps_S1_Pv:gene_name, everything())
+
+# write.csv(pv_TPM_D8, "pvivax_vs_pfalciparum/pvivax_day8_orthologs_TPM.csv",row.names = FALSE)
+```
+
+```{r}
+# install.packages("ggVennDiagram")
+library(ggVennDiagram)
+```
+
+```{r}
+# svglite("figures/uncorrected/pvivax_vs_pfalciparum_orthologs_venn.svg", height = 7, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+ggVennDiagram(ortholog_list,
+              label_alpha=0,
+              set_color=c(viridis::viridis(n = 1, begin=0.4),
+                          viridis::viridis(n = 1,begin = 0.8)),
+              set_size=6, 
+              label_color=c("black","black","white"),
+              label_size=6) + 
+  scale_color_manual(values=c(viridis::viridis(n = 1, begin=0.4),
+                              viridis::viridis(n = 1,begin = 0.8))) +
+  scale_fill_gradient(low="aliceblue", high = "deepskyblue3", name="Number of Orthologs")
+# dev.off()
+```
+
+
+## GO Terms 
+
+```{r message=FALSE}
+library(clusterProfiler)
+```
+
+```{r}
+GO_annots <- read.delim("expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_v58.txt", sep="\t") %>% 
+  janitor::clean_names()
+
+head(GO_annots)
+dim(GO_annots) #37,841    11
+# table(GO_annots$ontology)
+```
+
+```{r}
+GO_descriptions <- GO_annots %>% 
+  dplyr::select(go_id, ontology, go_term_name) %>% 
+  distinct() %>% 
+  mutate_at(vars(ontology), ~gsub("\\s", "_", .))
+
+dim(GO_descriptions)
+# any(duplicated(GO_descriptions$go_id))
+# GO_descriptions$ontology %>%  unique()
+```
+
+ns: p > 0.05
+
+*: p <= 0.05
+
+**: p <= 0.01
+
+***: p <= 0.001
+
+****: p <= 0.0001
+
+```{r}
+negLog10P_table <- data.frame(p.value=c(0.05,0.01,0.001,0.0001)) %>% 
+  mutate(negLog10P=-log10(p.value))
+
+# write.csv(negLog10P_table,"p.value_to_negLog10P_conversion_table.csv", row.names = FALSE)
+```
+
+```{r}
+ortholog_cats <- list("both"=both,"pv_only"=pv_only,"pf_only"=pf_only)
+```
+
+```{r}
+orthologs_go <- purrr::map(names(ortholog_cats), function(group){
+  
+  input <- ortholog_cats[[group]] 
+  
+  cats <- unique(GO_annots$ontology)
+  go_enr_df <- purrr::map_dfr(cats, function(x){
+      input_go_cats <- GO_annots %>% 
+        dplyr::filter(ontology==x) %>%
+        dplyr::select(ID=go_id, gene=gene_id)
+      go_enr <- enricher(gene = input,
+                        TERM2GENE = input_go_cats,
+                        minGSSize = 5,
+                        maxGSSize = 600)
+      if(!is.null(go_enr)){
+        go_enr@result
+      }
+  })
+
+  go_enr_df <- go_enr_df %>%
+    mutate(ortholog_expression_category=group) %>% 
+    left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
+    dplyr::select(ID,ortholog_expression_category,
+                  ontology:go_term_name,setSize=Count,
+           everything()) %>% 
+    dplyr::select(ID:go_term_name,pvalue,qvalue,
+                everything()) %>% 
+    dplyr::arrange(pvalue)
+
+  return(go_enr_df)
+})
+
+names(orthologs_go) <- names(ortholog_cats)
+```
+
+```{r}
+orthologs_go
+
+sapply(orthologs_go, function(df) table(df$qvalue < 0.05))
+sapply(orthologs_go, function(df) table(df$qvalue < 0.2))
+```
+
+```{r}
+orthologs_go_df <- bind_rows(orthologs_go)
+
+# orthologs_go_df
+# write.csv(orthologs_go_df, "pvivax_vs_pfalciparum/orthologs_go_ClusterProfiler_AllOntology.csv", row.names = FALSE)
+# table(orthologs_go_df$ortholog_expression_category)
+```
+
+```{r}
+p <- purrr::map(names(orthologs_go), function(group){
+  
+  df <- orthologs_go[[group]] %>% 
+    filter(ortholog_expression_category == group) %>% 
+    filter(ontology != "N/A", qvalue < 0.2) %>% 
+    mutate(setSize=as.integer(setSize)) %>% 
+    dplyr::arrange(pvalue)
+  
+    # svglite(paste0("figures/uncorrected/bubble_plots/ortholog_expression_",group,"_ClusterProfiler_bubblePlot.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 8)
+    print(clusterProfiler_bubble_plots(df,pval_column = "pvalue", Filter=FALSE) +
+      plot_annotation(title = paste0("Ortholog Expression Group: ",group)))
+    # dev.off()
+})
 ```
 
 
@@ -1168,12 +1528,21 @@ dev.off()
 I think I need to consider best practices here... not sure yet. 
 
 ```{bash}
-rsync -av DEGs /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
-rsync -av figures /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
-rsync -av expression_data /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
-rsync -av presentations /active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/
+DEST="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage"
+rsync -av DEGs $DEST
+rsync -av figures $DEST
+rsync -av presentations $DEST
+rsync -av expression_data/gene_annots/ $DEST/expression_data/gene_annots
+rsync -av pvivax_vs_pfalciparum $DEST
 ```
 
+```{bash}
+DEST="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage"
+
+rsync -av expression_data \
+  --include "kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS" \
+  --include "gene_annots" $DEST --dry-run
+```
 
 
 

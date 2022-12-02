@@ -31,3 +31,5 @@ sashimi_plot.R
 splicing/
 star/
 time_course/
+p.value_to_negLog10P_conversion_table.csv
+pvivax_vs_pfalciparum/

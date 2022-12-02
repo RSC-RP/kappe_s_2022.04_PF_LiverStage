@@ -30,7 +30,7 @@ library(ggpubr)
 library(patchwork)
 library(limma)
 library(edgeR)
-# suppressPackageStartupMessages(library(sva))
+suppressPackageStartupMessages(library(sva))
 library(Biobase)
 
 getwd()
@@ -543,7 +543,7 @@ sra_run_table <- read.csv("samples/SraRunTable.txt") %>%
          read_length=as.character(AvgSpotLen),
          platform=Instrument,
          parasite_species="Plasmodium falciparum",
-         read1_fastq=dir(file.path(ACTIVE,"taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/results/sratools"), 
+         read1_fastq=dir(file.path("/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/results/sratools"), 
                          pattern = "*.gz"), 
          read2_fastq="") %>% 
   select(sample_id_cat=Run, RNA_label:read2_fastq)
@@ -787,6 +787,7 @@ dim(cb)
 quantile(cb) # 0 1,316,352
 quantile(input_dge$counts)
 # saveRDS(cb,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS")
+# write.csv(cb,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.csv")
 ```
 
 ```{r eval=FALSE}
@@ -837,6 +838,15 @@ cb_SE <- SummarizedExperiment(assays=SimpleList(cpm=cpm(pf_combat_dge),
 cb_SE
 # saveRDS(cb_SE, "expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS")
 ```
+
+```{r}
+cpm <- SummarizedExperiment::assay(cb_SE,"cpm")
+
+
+dim(cpm)
+```
+
+
 
 ```{r}
 cb_eset <- Biobase::ExpressionSet(assayData=cpm(pf_combat_dge, log=TRUE, prior.count = 1),
@@ -1195,7 +1205,7 @@ Non-DE: not differential expressed, has a adj.p.value > 0.05 and abs(logFC) < 1
 Not expressed: filtered out during normalization
 Up: adj. p < 0.05, logFC > 1
 Down: adj. p < 0.05, logFC < -1
-
+]
 ```{r}
 DEG_files  <- dir(file.path("/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_PF_LiverStage/DEGs/"),
                             pattern="unfiltered_DEGs.csv",
@@ -1235,6 +1245,13 @@ for (i in 1:length(DEG_list)){
 ```
 
 ```{r}
+# calculate the % of categories 
+# all <- table(all_Genes$category, all_Genes$time_point)
+# counts_time <- table(all_Genes$time_point)
+# all[,1]/counts_time[1] * 100
+```
+
+```{r}
 # svg("./DEGs/number_of_DEGs_barplot.svg")
 pct_format = scales::percent_format(accuracy = .1)
 ggplot(all_Genes,aes(x=time_point, fill=category)) +
@@ -1248,18 +1265,35 @@ ggplot(all_Genes,aes(x=time_point, fill=category)) +
 ```
 
 ```{r}
-gene_annots <- read.csv("/active/taylor_s/people/ybae/CP-Bioinformed/kappe_s_2022.09_PF_LiverStage/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_annots.csv")
-gene_annots_pf <- gene_annots[grepl("^PF", gene_annots$gene_id),] # 5720
+# GO term annotated
+gene_annots <- read.csv("/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_filteredSetSizes_v58.txt")
+gene_annots_uniq <- unique(gene_annots$gene_id)
+# gene_annots_pf <- gene_annots[grepl("^PF", gene_annots$gene_id),] # 5720
 ```
 
 ```{r}
 all_Genes <- all_Genes %>% mutate(annotated=case_when(
-  gene_id %in% gene_annots_pf$gene_id ~ "annotated",
-  TRUE ~ "na"
+  gene_id %in% gene_annots_uniq ~ "annotated",
+  TRUE ~ "not_annotated"
 ))
 all_Genes
-write.csv(all_Genes, "./DEGs/all_Genes.csv", row.names = FALSE, quote=FALSE)
 
+# % of un-anotation
+table(all_Genes$category, all_Genes$annotated)
+table(all_Genes$category, all_Genes$annotated, all_Genes$time_point)
+
+day2 <- table(all_Genes$category, all_Genes$annotated, all_Genes$time_point)[,,1]
+day4 <- table(all_Genes$category, all_Genes$annotated, all_Genes$time_point)[,,2]
+day5 <- table(all_Genes$category, all_Genes$annotated, all_Genes$time_point)[,,3]
+day6 <- table(all_Genes$category, all_Genes$annotated, all_Genes$time_point)[,,4]
+
+annotataion_table <- as.data.frame.matrix(table(all_Genes$category, all_Genes$annotated)) %>% mutate(.,not_annotated_perc = (not_annotated/(annotated + not_annotated)))
+day2 <- as.data.frame.matrix(day2) %>% mutate(.,not_annotated_perc = (not_annotated/(annotated + not_annotated))*100)
+day4 <- as.data.frame.matrix(day4) %>% mutate(.,not_annotated_perc = (not_annotated/(annotated + not_annotated))*100)
+day5 <- as.data.frame.matrix(day5) %>% mutate(.,not_annotated_perc = (not_annotated/(annotated + not_annotated))*100)
+day6 <- as.data.frame.matrix(day6) %>% mutate(.,not_annotated_perc = (not_annotated/(annotated + not_annotated))*100)
+
+# write.csv(all_Genes, "./DEGs/all_Genes.csv", row.names = FALSE, quote=FALSE)
 ```
 
 # Absent Expression 

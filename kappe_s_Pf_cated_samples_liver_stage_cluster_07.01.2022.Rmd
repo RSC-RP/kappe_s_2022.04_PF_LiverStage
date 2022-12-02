@@ -518,7 +518,7 @@ sra_run_table <- read.csv("samples/SraRunTable.txt") %>%
          read_length=as.character(AvgSpotLen),
          platform=Instrument,
          parasite_species="Plasmodium falciparum",
-         read1_fastq=dir(file.path(ACTIVE,"taylor_s/people/jsmi26/RSC/kappe_s_2022.04_rnaseq_quant/results/sratools"), 
+         read1_fastq=dir(file.path(ACTIVE,"taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/results/sratools"), 
                          pattern = "*.gz"), 
          read2_fastq="") %>% 
   select(sample_id_cat=Run, RNA_label:read2_fastq)
@@ -935,9 +935,6 @@ ggplot( pf_pos_anno %>% filter(genome != "GRChm39"),
   geom_ribbon()
   # ggridges::geom_density_ridges2(alpha=0.5, scale=0.75)
 
-
-
-
 # dev.off()
 ```
 
@@ -952,7 +949,6 @@ df <- pf_pos_anno %>% filter(genome != "GRChm39") %>%
   mutate(ymin=mean_expn-sd, 
          ymax=mean_expn+sd, 
          alpha=ifelse(genome=="PF3D7", 0.25, 0.1))
-
 
 df
 ```
@@ -972,10 +968,10 @@ ribbon <- ggplot(df, aes(x=time_point, y=mean_expn, group=genome)) +
   theme_classic() +
   theme(axis.text = element_text(color="black", size=12))
 
-svg(filename = "figures/uncorrected/Pf3D7_human_expression_by_timepoint_ribbon_plot.svg",
-    height = 5, width = 7)
+# svg(filename = "figures/uncorrected/Pf3D7_human_expression_by_timepoint_ribbon_plot.svg",
+#     height = 5, width = 7)
 ribbon
-dev.off()
+# dev.off()
 
 ```
 

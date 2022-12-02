@@ -9,7 +9,8 @@
 #PBS -J 1-8
 
 # Set-up environment
-PATH="$HOME/opt/homer/bin:$PATH"
+ml homer
+#PATH="$HOME/opt/homer/bin:$PATH"
 PROJDIR="/active/taylor_s/people/jsmi26/RSC/kappe_s_2022.04_PF_LiverStage/homer"
 FILES=$(find $PROJDIR -type f -name "*.csv")
 
@@ -19,7 +20,6 @@ FILES=$(find $PROJDIR -type f -name "*.csv")
 genes_csv=$1
 results_dir=$(basename $(dirname "$genes_csv"))
 outdir="$PROJDIR/$results_dir"
-jaspar="$PROJDIR/jaspar2020.motif"
 
 # output standard out as log files
 log=$(basename $genes_csv)
@@ -28,11 +28,7 @@ log=${log%.csv}
 # Run HOMER motif analysis with built-in database and JASPAR motifs
 echo "Finding Motifs for $genes_csv"
 mkdir -p "$outdir/results_homer_db"
-mkdir -p "$outdir/results_jaspar2020_db"
 
 findMotifs.pl $genes_csv Pf3D7_promoters "$outdir/results_homer_db" -start -1000 -end 0 -p 4 2> ${log}_homer_db.out
-
-#findMotifs.pl lpsGenes.txt mouse MotifOutputDirectory/ -find motif1.motif > outputfile.txt
-findMotifs.pl $genes_csv Pf3D7_promoters "$outdir/results_jaspar2020_db" -find $jaspar 2> ${log}_jaspar_db.out
 
 echo "complete"
