@@ -1,12 +1,5 @@
 #!/bin/bash
 
-#PBS -P 9164fb2f-42f9-4075-a1f9-e5e52f22fcfc
-#PBS -q paidq
-#PBS -M jenny.smith@seattlechildrens.org 
-#PBS -l select=1:ncpus=1:mem=16g
-#PBS -l walltime=24:00:00
-#PBS -j oe
-#PBS -J 1-8
 
 # Set-up environment
 ml homer
