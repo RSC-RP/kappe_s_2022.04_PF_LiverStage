@@ -786,8 +786,7 @@ input_dge <- pf_dge #pf_dge
 dim(cb)
 quantile(cb) # 0 1,316,352
 quantile(input_dge$counts)
-# saveRDS(cb,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS")
-# write.csv(cb,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.csv")
+# saveRDS(cb,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS") 
 ```
 
 ```{r eval=FALSE}
@@ -840,13 +839,25 @@ cb_SE
 ```
 
 ```{r}
-cpm <- SummarizedExperiment::assay(cb_SE,"cpm")
+# SummarizedExperiment::colData(cb_SE)
+# identical(cb_SE$sample_id_cat, colnames(cb_SE)) #TRUE
 
+#batch corrected counts for GEO
+cb_forGEO <- cb[,sample_manifest_cated$sample_id_cat]
+colnames(cb_forGEO) <- gsub("\\+","",sample_manifest_cated$sample_id_cat)
+# write.csv(cb_forGEO,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.csv")
+
+#CPM for supplemental materials
+cpm <- SummarizedExperiment::assay(cb_SE,"cpm")
+colnames(cpm) <- gsub("\\+","",cb_SE$analysis_group_id)
+cpm <- cpm %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id")
 
 dim(cpm)
+head(cpm)
+# write.csv(cpm, "expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_CPM.csv", row.names = FALSE)
 ```
-
-
 
 ```{r}
 cb_eset <- Biobase::ExpressionSet(assayData=cpm(pf_combat_dge, log=TRUE, prior.count = 1),

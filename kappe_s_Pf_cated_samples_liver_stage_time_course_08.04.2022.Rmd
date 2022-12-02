@@ -556,7 +556,7 @@ Also, its very specific to human or mouse datasets, without any option to build 
 
 ```{r}
 # devtools::install_github("jaleesr/TrendCatcher", dependencies = TRUE, build_vignettes = FALSE)
-suppressPackageStartupMessages(library(TrendCatcher))
+# suppressPackageStartupMessages(library(TrendCatcher))
 ```
 
 ```{r}
@@ -855,7 +855,7 @@ ggplot(data=expn,
 ```
 
 ```{r fig.height=10, fig.width=14}
-pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_boxplot.pdf", height = 10, width = 14)
+# pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_boxplot.pdf", height = 10, width = 14)
 
 ggplot(data=expn,
        aes(x=analysis_factor_group, y=log2_CPM, fill=analysis_factor_group)) +
@@ -873,11 +873,11 @@ ggplot(data=expn,
   theme(axis.text.x = element_text(angle=35, vjust=1, hjust=1,color="black"),
         axis.title.x = element_blank(),
         plot.margin = margin(l=5, unit="mm"))
-dev.off()
+# dev.off()
 ```
 
 ```{r fig.height=10, fig.width=14}
-pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_median_dotplot.pdf", height = 10, width = 14)
+# pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_median_dotplot.pdf", height = 10, width = 14)
 
 ggplot(data=expn,
        aes(x=analysis_factor_group, y=median_val_per_sample, 
@@ -894,7 +894,7 @@ ggplot(data=expn,
         axis.title.x = element_blank(),
         plot.margin = margin(l=5, unit="mm"))
 
-dev.off()
+# dev.off()
 ```
 
 ```{r fig.height=20, fig.width=12}
@@ -926,12 +926,8 @@ sample_order <- sigs_all$sig.genes$sig.profiles %>%
                 matches("Pf_Day[56]"))  %>% 
   colnames()
 
-sample_order
-
-```
-
-```{r}
-plot(hmap_time_course$dends$samp.c1)
+# sample_order
+# plot(hmap_time_course$dends$samp.c1)
 ```
 
 
@@ -1005,6 +1001,14 @@ gene_clusters_d456 <- see.genes(data = sigs_all_d456$sig.genes,
 
 # str(gene_clusters_d456)
 ```
+
+-Panel C putative:
+Group for cluster trend:
+Profile 1 Highly expressed in SPZ down in LS ( Cluster 1 & 2),
+Profile 2 Highly expressed in SPZ reduced in LS (Cluster 3 and 8),
+Profile 3 expressed in SPZ upregulated in LS (Cluster 4 & 6),
+Profile 4 Increasing over LS development (Cluster 5 & Cluster 9),
+Profile 5 upregulated in mature LS forms (Cluster 7).
 
 ```{r}
 # identical(names(gene_clusters_d456$cut),sigs_all_d456$summary)
@@ -1256,7 +1260,7 @@ data(NBdesign)
 # View(NBdesign)
 ```
 
-```{r}
+```{r eval=FALSE}
 IDs <- rbind(paste("feature", c(1:300), sep = ""),
        rep(paste("gene", c(1:150), sep = ""), each = 2))
 
@@ -1826,14 +1830,14 @@ https://plasmodb.org/plasmo/app/search/transcript/GeneByLocusTag
 
 http://current.geneontology.org/products/pages/downloads.html
 
--Panel C putative: 
+-Panel C putative:
 Group for cluster trend:
 Profile 1 Highly expressed in SPZ down in LS ( Cluster 1 & 2),
 Profile 2 Highly expressed in SPZ reduced in LS (Cluster 3 and 8),
-Profile 3 expressed in SPZ upregulated in LS (Cluster 4 & 6), 
-Profile 4 Increasing over LS development (Cluster 5), 
-Profile 5 constant in LS Development (Cluster 9), 
-Profile 6 upregulated in mature LS forms (Cluster 7). 
+Profile 3 expressed in SPZ upregulated in LS (Cluster 4 & 6),
+Profile 4 Increasing over LS development (Cluster 5 & Cluster 9),
+Profile 5 upregulated in mature LS forms (Cluster 7).
+
 
 * Evaluate if the new GO terms for this profiles increase significance and data interpretation. 
 
@@ -1851,9 +1855,8 @@ time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2
     grepl("1$|2$",gene_cluster) ~ "Profile1",
     grepl("3$|8$", gene_cluster) ~ "Profile2",
     grepl("4$|6$", gene_cluster) ~ "Profile3",
-    grepl("5", gene_cluster) ~ "Profile4",
-    grepl("9", gene_cluster) ~ "Profile5",
-    grepl("7", gene_cluster) ~ "Profile6"
+    grepl("5$|9$", gene_cluster) ~ "Profile4",
+    grepl("7", gene_cluster) ~ "Profile5"
   )) %>% 
   dplyr::select(gene_id, matches("gene_cluster"), everything()) %>% 
   arrange(gene_cluster)
@@ -1876,8 +1879,8 @@ gene_clusts_combined_dfs <- purrr::map(unique(time_course$combined_gene_clusters
 # head(gene_clusts_dfs$cluster1)
 # lapply(gene_clusts_dfs, function(x) quantile(x$betaTime))
 
-# table(time_course$gene_cluster_factor,
-#       time_course$combined_gene_clusters)
+table(time_course$gene_cluster_factor,
+      time_course$combined_gene_clusters)
 ```
 
 ```{r}
@@ -2301,8 +2304,15 @@ names(cluster_go_combined) <- names(gene_clusts_combined_dfs)
 ```
 
 ```{r}
-# sapply(cluster_go_combined, dim)
-# lapply(cluster_go_combined, head)
+cluster_go_combined$Profile1 %>% 
+  filter(is.na(qvalue))
+```
+
+```{r}
+sapply(cluster_go_combined, dim)
+lapply(cluster_go_combined, head)
+
+# sapply(cluster_go_combined, function(x) table(x$qvalue < 0.05))
 ```
 
 ```{r}
