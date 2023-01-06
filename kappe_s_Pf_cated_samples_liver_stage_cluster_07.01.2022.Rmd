@@ -891,55 +891,11 @@ length(density_plots)
 # density_plots$control_S1
 ```
 
-## PF3D7 Expression by Timepoint
+## PF3D7 Expression Ribbon Plot
 
 ```{r}
-pf_pos_anno <- all_genomes_expression$CPM_anno %>% 
-  dplyr::filter(grepl("Pf\\+", analysis_group))
-
-# pdf("figures/uncorrected/Pf3D7_expression_by_timepoint_boxplots.pdf",
-#     height = 7, width = 10)
-
-ggplot( pf_pos_anno, 
-          aes(y=time_point, x=log2(TMMCPM+1), fill=genome)) +
-      # ggridges::geom_density_ridges(alpha=0.5, scale=0.75) +
-      geom_boxplot(
-        position = position_dodge(),
-        # position = position_nudge(y=-0.2),
-                   width=0.5,
-                   outlier.size=0.5,
-                   outlier.alpha=0.5) +
-      theme_classic()
-# dev.off()
-```
-
-```{r}
-# pdf("figures/uncorrected/Pf3D7_human_expression_by_timepoint_boxplots.pdf",
-#     height = 7, width = 10)
-
-
-box <- ggplot( pf_pos_anno %>% filter(genome != "GRChm39"), 
-          aes(y=time_point, x=log2(TMMCPM+1), fill=genome)) +
-      geom_boxplot(
-        position = position_dodge(),
-        # position = position_nudge(y=-0.2),
-                   width=0.5,
-                   outlier.size=0.5,
-                   outlier.alpha=0.5) +
-      theme_classic()
-
-ggplot( pf_pos_anno %>% filter(genome != "GRChm39"), 
-          aes(y=log2(TMMCPM+1), 
-              x=time_point, 
-              fill=genome)) +
-  geom_ribbon()
-  # ggridges::geom_density_ridges2(alpha=0.5, scale=0.75)
-
-# dev.off()
-```
-
-```{r}
-df <- pf_pos_anno %>% filter(genome != "GRChm39") %>% 
+df <- pf_pos_anno %>% 
+  filter(genome != "GRChm39") %>% 
   select(gene_name,genome, sample_id_cat, time_point, TMMCPM) %>% 
   mutate(log2_TMMCPM=log2(TMMCPM+1)) %>% 
   group_by(time_point, genome) %>% 

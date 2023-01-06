@@ -593,7 +593,7 @@ clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
 
 # Data locations
 
-```{bash}
+```{bash eval=FALSE}
 data_processing_path="/active/taylor_s/people/jsmi26/RSC/kappe_s_2022.04_rnaseq_quant"
 rsync -av $data_processing_path/qc_data .
 rsync -av $data_processing_path/raw_counts .
@@ -640,7 +640,6 @@ mapping_stats <- read.csv("qc_data/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_counts_s
 head(mapping_stats)
 dim(mapping_stats)
 ```
-
 
 # Genome References
 
@@ -695,13 +694,15 @@ head(pv_orthologs)
 ```
 
 
-# Counts and Normalization 
+# Normalization 
 
 ```{r}
-pv_TPM <- read.csv("expression_data/kappe_s_PvHsMmu_PVP01_TPM.csv")
+pv_TPM <- read.csv("expression_data/kappe_s_PvHsMmu_PVP01_TPM.csv") %>% 
+  rename_all(~gsub("\\.","", .))
 
 # dim(pv_TPM) #6861
 head(pv_TPM)
+table(duplicated(pv_TPM$gene_name))
 ```
 
 ```{r}
@@ -709,6 +710,14 @@ pf_TPM <- read.csv("expression_data/kappe_s_PfHsMmu_PF3D7_TPM.csv")
 
 # dim(pf_TPM) #5720   64
 head(pf_TPM)
+```
+
+```{r}
+all_TPM <- read.csv("/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/normalized_counts/kappe_s_PvHsMmu_GRCh38_GRCm39_Pf3D7v58_TPM.csv") %>% 
+  rename_all(~gsub("\\.","", .))
+
+
+dim(all_TPM)
 ```
 
 ```{r}
@@ -739,7 +748,8 @@ pv_genes <- species_genes %>%
   filter(genome=="PVP01")
 
 pv_counts <- counts_matrix_cated[pv_genes$gene_id,]
-dim(pv_counts)
+# dim(pv_counts)
+
 pv_dge <- edgeR::DGEList(counts=pv_counts[,-1],
                          group=pvivax_manifest$group,
                          remove.zeros=FALSE)
@@ -749,7 +759,7 @@ pv_dge <- pv_dge[pv_keep,]
 pv_dge <- edgeR::calcNormFactors(pv_dge, method="TMMwsp")
 pv_TMMCPM <- as.data.frame(edgeR::cpm(pv_dge, normalized.lib.sizes = TRUE, log=FALSE))
 
-dim(pv_TMMCPM)  #4682    6
+# dim(pv_TMMCPM)  #4682    6
 head(pv_TMMCPM[,1:5])
 
 # quantile(as.matrix(pv_TMMCPM))
@@ -797,6 +807,17 @@ all_genomes_expression <- create_long_format_dfs(species_genes=species_genes,
                                         pvivax_manifest=pvivax_manifest,
                                         counts_matrix_cated=counts_matrix_cated, 
                                         TMMCPM = TMMCPM_all)
+```
+
+```{r}
+all_genomes_expn_TPM <- create_long_format_dfs(species_genes=species_genes,
+                                        pvivax_manifest=pvivax_manifest,
+                                        counts_matrix_cated=counts_matrix_cated, 
+                                        TMMCPM = column_to_rownames(all_TPM,"gene_name"))
+names(all_genomes_expn_TPM)[c(1,4)] <- c("TPM_anno","TPM")
+colnames(all_genomes_expn_TPM$TPM_anno)[grep("TMMCPM", colnames(all_genomes_expn_TPM$TPM_anno))] <- "TPM"
+
+# lapply(all_genomes_expn_TPM, head)
 ```
 
 
@@ -940,7 +961,177 @@ ggplot(three_prime_UTR_counts, aes(x=sample, y=percent_assigned_tags, fill=Tags.
 
 # Expression EDA 
 
-## Boxplots of Expression 
+## Boxplots/Density Plots
+
+```{r}
+tpm_df <- all_genomes_expn_TPM$TPM_anno %>% 
+  mutate(log2_TPM=log2(TPM+1),
+         log10_TPM=log10(TPM+1),
+         alpha=ifelse(genome=="GRCh38", 0.5, 0.8)) %>% 
+  arrange(group) %>% 
+  # Include control mice and human/PF genomes only
+  filter(genome != "GRChm39",
+         group != "PI4K") %>% 
+  
+  group_by(genome, gene_id) %>% 
+  mutate(median_perGene_TPM=median(log2_TPM)) %>% 
+  ungroup() %>% 
+  
+  group_by(genome) %>% 
+  mutate(median_perGenome_TPM=median(log2_TPM)) %>% 
+  ungroup() %>% 
+  select(gene_name:gene_id,sample_id, 
+         TPM, log2_TPM,
+         median_perGene_TPM,median_perGenome_TPM,
+         everything())
+
+dim(tpm_df)
+table(tpm_df$genome)
+```
+
+```{r}
+#Filter for gene_ids with rowSums  >= 1 TPM 
+gene_filt <- tpm_df %>% 
+  group_by(genome,gene_id) %>%
+  summarise(rowSums=sum(TPM >= 1),
+            .groups='keep') %>%
+  ungroup() %>%
+  # At least 1 TPM in at least 1 control sample
+  mutate(keep=rowSums >= 1) %>% 
+  arrange(desc(genome)) %>% 
+  filter(keep) %>%
+  pull(gene_id)
+
+# table(gene_filt$keep, gene_filt$genome)
+#         GRCh38 PVP01
+#   FALSE  55030  1806
+#   TRUE    6522  5055
+```
+
+```{r}
+barplot(rep(1,2),col=viridis::viridis(n=2,begin=0, end=0.8))
+barplot(rep(1,2), col=viridis::viridis(n = 2, begin=0.4, direction = -1))
+```
+
+```{r}
+# svglite::svglite("figures/uncorrected/pvivax_human_day8control_gene_expn_nofilter_densityPlot.svg",
+#                  height = 5, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+
+# pdf("figures/uncorrected/pvivax_human_day8control_gene_expn_nofilter_densityPlot.pdf", height = 5, width = 7)
+
+density_input <- tpm_df %>% 
+  select(gene_id,genome,median_perGene_TPM) %>% 
+  distinct()
+
+ggplot(tpm_df, 
+       aes(y=genome, x=log2_TPM, fill=genome)) +
+  geom_point(data = density_input, 
+             mapping = aes(y=genome, x=median_perGene_TPM, color=genome),
+             shape="|",
+             size=4,
+             alpha=0.05,
+             position = position_nudge(x = 0, y = -0.05)
+             ) +
+  ggridges::geom_density_ridges(scale=1.25,
+                                alpha=0.7,
+                                quantile_lines=TRUE,
+                                quantiles=2,
+                                vline_size = 0.5,
+                                vline_color="grey80",
+                                vline_linetype="dashed",
+                                jittered_points = FALSE
+                                ) +
+  scale_fill_manual(values=colors) +
+  scale_color_manual(values=colors) +
+  scale_y_discrete(expand = c(0.15, 0.1)) +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme_classic() +
+  theme(axis.text.y = element_text(vjust=1, hjust=1),
+        plot.margin = margin(t=3, unit="mm"))
+# dev.off()
+```
+
+```{r}
+colors <- c("PVP01"="#2A788EFF", "GRCh38"="#440154FF")
+filt_TPM <- tpm_df %>% 
+  filter(gene_id %in% gene_filt) %>% 
+  select(gene_id,genome,log2_TPM,median_perGene_TPM) %>% 
+  distinct()
+
+# svglite::svglite("figures/uncorrected/pvivax_human_day8control_gene_expn_filtered_densityPlot.svg",
+#                  height = 5, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+
+# pdf("figures/uncorrected/pvivax_human_day8control_gene_expn_filtered_densityPlot.pdf",
+                 # height = 5, width = 7)
+
+ggplot(filt_TPM, 
+       aes(y=genome, x=log2_TPM, fill=genome)) +
+  geom_boxplot(width=0.2,
+                outlier.color = alpha("grey60", alpha=0.5),
+                outlier.size = 0.5,
+                alpha=0.7,
+                lwd=0.25,
+                color="black",
+                position = position_nudge(x = 0, y = -0.125)) +
+  ggridges::geom_density_ridges(scale=1.25,
+                                alpha=0.7,
+                                quantile_lines=TRUE,
+                                quantiles=2,
+                                vline_size = 0.5,
+                                vline_color="grey80",
+                                vline_linetype="dashed",
+                                jittered_points = FALSE
+                                ) +
+  scale_fill_manual(values=colors) +
+  scale_color_manual(values=colors) +
+  scale_y_discrete(expand = c(0.15, 0.1)) +
+  scale_x_continuous(expand = c(0, 0)) +
+  theme_classic() +
+  theme(axis.text.y = element_text(vjust=1, hjust=1),
+        plot.margin = margin(t=3, unit="mm"))
+# dev.off()
+```
+
+```{r}
+# svglite::svglite("figures/uncorrected/pvivax_human_day8control_gene_expn_nofilter_violin.svg",
+#                  height = 5, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+
+# pdf("figures/uncorrected/pvivax_human_day8control_gene_expn_nofilter_violin.pdf",
+#                  height = 5, width = 7)
+
+ggplot(tpm_df, 
+       aes(x=genome, y=log2_TPM)) +
+  geom_point(aes(color=genome),
+             size=0.5,
+             alpha=0.1,
+             position = position_jitter()) +
+  geom_violin(aes(fill=genome),
+              scale="width",
+              draw_quantiles = 0.5,
+              color="grey80",
+              size=0.5) +
+  scale_fill_manual(values=colors) +
+  scale_color_manual(values=colors) +
+  theme_classic() +
+  theme(axis.text.y = element_text(vjust=1, hjust=1),
+        plot.margin = margin(t=3, unit="mm"))
+
+# dev.off()
+```
+
+```{r}
+ggplot(tpm_df, 
+       aes(x=genome, y=log2_TPM)) +
+  ggbeeswarm::geom_quasirandom(aes(color=genome),
+                               size=0.1,
+                               alpha=0.1,
+                               method = "smiley") +
+  scale_fill_manual(values=colors) +
+  scale_color_manual(values=colors) +
+  theme_classic() +
+  theme(axis.text.y = element_text(vjust=1, hjust=1),
+        plot.margin = margin(t=3, unit="mm"))
+```
 
 ```{r fig.height=4, fig.width=5}
 pos_gex <- pv_expression$CPM_anno %>% 
@@ -952,7 +1143,6 @@ ggplot(pos_gex, aes(x=sample_id, y=log2_TMMCPM)) +
   theme(axis.text.x = element_text(angle=25, vjust=1, hjust=1))
 ```
 
-
 ```{r fig.height=6, fig.width=10}
 pos_gex_all <- all_genomes_expression$CPM_anno %>% 
   mutate(log2_TMMCPM=log2(TMMCPM+1)) %>% 
@@ -963,6 +1153,8 @@ ggplot(pos_gex_all, aes(x=sample_id, y=log2_TMMCPM)) +
   geom_boxplot(aes(fill=group)) +
   theme(axis.text.x = element_text(angle=25, vjust=1, hjust=1))
 ```
+
+
 
 ## PCA 
 
@@ -1519,8 +1711,6 @@ p <- purrr::map(names(orthologs_go), function(group){
     # dev.off()
 })
 ```
-
-
 
 
 # Share the Data 

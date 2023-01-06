@@ -1,0 +1,32 @@
+#!/bin/bash
+#PBS -P 9164fb2f-42f9-4075-a1f9-e5e52f22fcfc
+#PBS -q paidq
+#PBS -N homer
+#PBS -l select=1:ncpus=1:mem=16g
+#PBS -l walltime=08:00:00
+#PBS -j oe
+#PBS -J 1-16
+
+# Set-up environment
+cd $PBS_O_WORKDIR
+ml R/4.1.0-foss-2020b
+PATH="$HOME/opt/homer/bin:$PATH"
+PROJDIR="/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_PF_LiverStage/motif_analysis/homer"
+FILES=$(find $PROJDIR -type f -name "*.csv")
+
+# Data Locations
+genes_csv=$(echo "$FILES" | sed -n "$PBS_ARRAY_INDEX"p)
+# genes_csv=$1
+results_dir="$(dirname "$genes_csv")/results_homer_db"
+
+# output standard out as log files
+log=$(basename $genes_csv)
+log=${log%.csv}
+
+# Run HOMER motif analysis with built-in database and JASPAR motifs
+echo "Finding Motifs for $genes_csv"
+mkdir -p "$results_dir"
+
+findMotifs.pl $genes_csv Pf3D7_promoters $results_dir -start -1000 -end 0 -p 4 -dumpFasta 2> ${log}_homer_db.out
+
+echo "complete"
