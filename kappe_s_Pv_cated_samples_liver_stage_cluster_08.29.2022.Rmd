@@ -700,22 +700,22 @@ head(pv_orthologs)
 pv_TPM <- read.csv("expression_data/kappe_s_PvHsMmu_PVP01_TPM.csv") %>% 
   rename_all(~gsub("\\.","", .))
 
-# dim(pv_TPM) #6861
-head(pv_TPM)
+dim(pv_TPM) #6861
+# head(pv_TPM)
 table(duplicated(pv_TPM$gene_name))
 ```
 
 ```{r}
 pf_TPM <- read.csv("expression_data/kappe_s_PfHsMmu_PF3D7_TPM.csv")
 
-# dim(pf_TPM) #5720   64
-head(pf_TPM)
+dim(pf_TPM) #5720   64
+# head(pf_TPM)
 ```
 
+active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/normalized_counts/kappe_s_PvHsMmu_GRCh38_GRCm39_Pf3D7v58_TPM.csv
 ```{r}
-all_TPM <- read.csv("/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/normalized_counts/kappe_s_PvHsMmu_GRCh38_GRCm39_Pf3D7v58_TPM.csv") %>% 
+all_TPM <- read.csv("expression_data/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_TPM.csv") %>% 
   rename_all(~gsub("\\.","", .))
-
 
 dim(all_TPM)
 ```
@@ -729,7 +729,7 @@ dge_all <- edgeR::calcNormFactors(dge_all, method="TMMwsp")
 TMMCPM_all <- as.data.frame(edgeR::cpm(dge_all,normalized.lib.sizes = TRUE, log=FALSE))
 
 dim(TMMCPM_all)
-head(TMMCPM_all[,1:5])
+# head(TMMCPM_all[,1:5])
 ```
 
 ```{r}
@@ -1014,11 +1014,11 @@ barplot(rep(1,2), col=viridis::viridis(n = 2, begin=0.4, direction = -1))
 ```
 
 ```{r}
-# svglite::svglite("figures/uncorrected/pvivax_human_day8control_gene_expn_nofilter_densityPlot.svg",
-#                  height = 5, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+# svglite::svglite("figures/uncorrected/pvivax_human_day8control_gene_expn_nofilter_densityPlot.svg",height = 5, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 
 # pdf("figures/uncorrected/pvivax_human_day8control_gene_expn_nofilter_densityPlot.pdf", height = 5, width = 7)
 
+colors <- c("PVP01"="#2A788EFF", "GRCh38"="#440154FF")
 density_input <- tpm_df %>% 
   select(gene_id,genome,median_perGene_TPM) %>% 
   distinct()
@@ -1048,6 +1048,7 @@ ggplot(tpm_df,
   theme_classic() +
   theme(axis.text.y = element_text(vjust=1, hjust=1),
         plot.margin = margin(t=3, unit="mm"))
+
 # dev.off()
 ```
 
@@ -1058,11 +1059,9 @@ filt_TPM <- tpm_df %>%
   select(gene_id,genome,log2_TPM,median_perGene_TPM) %>% 
   distinct()
 
-# svglite::svglite("figures/uncorrected/pvivax_human_day8control_gene_expn_filtered_densityPlot.svg",
-#                  height = 5, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+# svglite::svglite("figures/uncorrected/pvivax_human_day8control_gene_expn_filtered_densityPlot.svg", height = 5, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 
-# pdf("figures/uncorrected/pvivax_human_day8control_gene_expn_filtered_densityPlot.pdf",
-                 # height = 5, width = 7)
+# pdf("figures/uncorrected/pvivax_human_day8control_gene_expn_filtered_densityPlot.pdf", height = 5, width = 7)
 
 ggplot(filt_TPM, 
        aes(y=genome, x=log2_TPM, fill=genome)) +
@@ -1366,9 +1365,9 @@ dim(Pf_day2_PI4K) #270
 ```{r}
 Pf_day2_PI4K %>% 
   filter(upregulated_pvivax_PI4K==1, 
-         downregulated_pfalciparum_Day2==1) %>% 
-  write.table(., "Orthologs_downregulated_pfalciparum_Day2_upregulated_pvivax_PI4K.csv",row.names = F,
-              sep=",")
+         downregulated_pfalciparum_Day2==1) #%>% 
+  # write.table(., "Orthologs_downregulated_pfalciparum_Day2_upregulated_pvivax_PI4K.csv",row.names = F,
+  #             sep=",")
 ```
 
 
@@ -1445,6 +1444,11 @@ Pf_day6_PI4K_upset
 # dev.off()
 ```
 
+```{r}
+# pf_TPM %>% 
+#   filter(gene_name %in% c("PF3D7_0304600","PF3D7_0818900"))
+```
+
 ## Total Expression
 
 ```{r}
@@ -1509,8 +1513,8 @@ pv_TPM_D8 <- pv_TPM[,c("gene_name",pv_D8)] %>%
          Day8_Heps_S1_Pv:description,
          number_mapped_orthologs,number_mapped_orthologs)
 
-dim(pv_TPM)
-dim(pv_TPM_D8)
+# dim(pv_TPM)
+# dim(pv_TPM_D8)
 ```
 
 ```{r}
@@ -1584,7 +1588,7 @@ library(ggVennDiagram)
 ```
 
 ```{r}
-# svglite("figures/uncorrected/pvivax_vs_pfalciparum_orthologs_venn.svg", height = 7, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+# svglite::svglite("figures/uncorrected/pvivax_vs_pfalciparum_orthologs_venn.svg", height = 7, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 ggVennDiagram(ortholog_list,
               label_alpha=0,
               set_color=c(viridis::viridis(n = 1, begin=0.4),
@@ -1620,7 +1624,7 @@ GO_descriptions <- GO_annots %>%
   distinct() %>% 
   mutate_at(vars(ontology), ~gsub("\\s", "_", .))
 
-dim(GO_descriptions)
+dim(GO_descriptions) #3230    3
 # any(duplicated(GO_descriptions$go_id))
 # GO_descriptions$ontology %>%  unique()
 ```
@@ -1705,7 +1709,7 @@ p <- purrr::map(names(orthologs_go), function(group){
     mutate(setSize=as.integer(setSize)) %>% 
     dplyr::arrange(pvalue)
   
-    # svglite(paste0("figures/uncorrected/bubble_plots/ortholog_expression_",group,"_ClusterProfiler_bubblePlot.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 8)
+    # svglite::svglite(paste0("figures/uncorrected/bubble_plots/ortholog_expression_",group,"_ClusterProfiler_bubblePlot.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 8)
     print(clusterProfiler_bubble_plots(df,pval_column = "pvalue", Filter=FALSE) +
       plot_annotation(title = paste0("Ortholog Expression Group: ",group)))
     # dev.off()

@@ -489,15 +489,15 @@ Pf3D7, PlasmoDB v58 annotations
 STAR aligner:
 https://childrens-atlassian/bitbucket/projects/RSC/repos/kappe_s_2022.04_rnaseq_quant/browse?at=refs%2Fheads%2Fkappe_s_2022.06 
 
-```{bash}
+```{bash eval=FALSE}
 data_processing_path="/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant"
+rsync -av $data_processing_path/samples .
 rsync -av $data_processing_path/qc_data .
 rsync -av $data_processing_path/raw_counts .
 rsync -av $data_processing_path/normalized_counts/ ./expression_data/
-rsync -av $data_processing_path/samples .
 ```
 
-```{bash}
+```{bash eval=FALSE}
 data_processing_path="/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant"
 ln -svf $data_processing_path/species_genomes .
 #ln -svf $data_processing_path/ .
@@ -547,6 +547,11 @@ dim(sample_manifest_cated)
 table(sample_manifest_cated$analysis_group)
 ```
 
+```{r}
+full_manifest <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_sample_manifest_v2.csv")
+# head(full_manifest)
+```
+
 # Select Input Samples
 
 ```{r}
@@ -572,9 +577,9 @@ counts_matrix_cated <- read.csv("raw_counts/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v
   select(all_of(c("gene_id", sample_manifest_cated$sample_id_cat))) %>%
   set_rownames(.$gene_id)
 
-head(counts_matrix_cated)
-dim(counts_matrix_cated)
-dim(sample_manifest_cated)
+# head(counts_matrix_cated)
+# dim(counts_matrix_cated)
+# dim(sample_manifest_cated)
 ```
 
 ```{r}
@@ -582,9 +587,10 @@ mapping_stats <- read.csv("qc_data/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_counts
   rename_at(vars(gene_name), ~c("gene_id")) %>% 
   select(all_of(c("gene_id", sample_manifest_cated$sample_id_cat))) 
 
-head(mapping_stats)
-dim(mapping_stats)
+# head(mapping_stats)
+# dim(mapping_stats)
 ```
+
 
 
 # Genome References
@@ -599,6 +605,21 @@ head(species_genes)
 ```
 
 # Counts and Normalization 
+
+```{r}
+pf_TPM <- read.csv("expression_data/kappe_s_PfHsMmu_PF3D7_TPM.csv") %>% 
+  set_rownames(.$gene_name)
+
+# dim(pf_TPM) #5720   64
+head(pf_TPM)
+```
+
+```{r}
+all_TPM <- read.csv("/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/normalized_counts/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_TPM.csv") %>% 
+  set_rownames(.$gene_name)
+
+dim(all_TPM)
+```
 
 ```{r}
 dge_all <- edgeR::DGEList(counts=counts_matrix_cated[,-1])
@@ -671,6 +692,8 @@ all_genomes_expression <- create_long_format_dfs(species_genes=species_genes,
 
 
 
+
+
 ## Compare with Previous Analysis
 
 ```{r eval=FALSE}
@@ -721,6 +744,9 @@ sum(pf_dge$counts[,"Day2.GFP_L1Pf2xTR2_L1Pf2_S1"]) #21,687
 
 ## Counted Reads vs Total Sequenced Reads 
 
+Note that STAR counts a paired-end read as one read,
+(unlike the samtools flagstat/idxstats, which count each mate separately).
+
 ```{r}
 total_counts <- all_genomes_expression$counts_anno %>% 
   group_by(sample_id_cat) %>% 
@@ -741,12 +767,29 @@ mapping_stats_comparison <- mapping_stats_long %>%
   mutate(total_reads=sum(number_reads)) %>% 
   mutate(Percent=round(number_reads/total_reads*100, digits=2)) %>% 
   ungroup() %>% 
+  left_join(., sample_manifest_cated, by="sample_id_cat") %>% 
   arrange(sample_id_cat)
 
 head(mapping_stats_comparison)
 # write.csv(mapping_stats_comparison, "expression_data/kappe_s_PfHsMmu_mapping_stats_cated_samples_GRCh38_GRCm39_Pf3D7v58_07.01.2022.csv",
 # row.names = FALSE)
 ```
+
+```{r}
+seq_depth <- mapping_stats_comparison %>% 
+  select(sample_id_cat, total_reads, analysis_group) %>% 
+  distinct() %>% 
+  group_by(analysis_group) %>% 
+  summarise(mean_pe_reads=mean(total_reads)) %>% 
+  ungroup() %>% 
+  mutate(mean_pe_reads=formatC(mean_pe_reads, format = "e", digits = 1)) %>% 
+  arrange(analysis_group)
+
+seq_depth
+# table(seq_depth$analysis_group)
+# write.csv(seq_depth, "liver_stage_rnaseq_seqdepth_by_group.csv", row.names = FALSE)
+```
+
 
 ```{r}
 df <- mapping_stats_comparison %>% 
@@ -771,6 +814,8 @@ nofeature_barplot <- ggplot(df, aes(x=sample_id_cat,  y=Percent, fill=statistic)
 nofeature_barplot
 # ggsave(filename="figures/sample_qc/kappe_s_cat_samples_nofeature_exon_gene_counts_barplot.pdf", plot = nofeature_barplot, device = "pdf", height = 5, width = 12)
 ```
+
+
 
 ## rRNA 
 
@@ -1019,6 +1064,60 @@ grouped_plots <- purrr::map(groups, function(grp, density_plots=pf_density_plots
 })
 # names(grouped_plots) <- unique(sample_manifest_cated$analysis_group) 
 ```
+
+```{r}
+pf_seqdepth_per_sample <- pf_expression$counts_anno %>% 
+  group_by(sample_id_cat,analysis_group) %>% 
+  summarise(total_pf_pe_reads=sum(counts),
+            .groups = "keep") %>% 
+  ungroup() %>% 
+  arrange(analysis_group) 
+
+# pf_seqdepth_per_sample
+
+pf_seqdepth <- pf_seqdepth_per_sample %>% 
+  group_by(analysis_group) %>% 
+  summarize(mean_pf_pe_reads=round(mean(total_pf_pe_reads))) %>% 
+  ungroup()
+
+pf_seqdepth
+# write.csv(pf_seqdepth,"liver_stage_Pfalciparum_aligned_rnaseq_seqdepth_by_group.csv", row.names = FALSE)
+```
+
+```{r}
+pf_seqdepth_per_sample %>% 
+  filter(analysis_group=="sporozorite") %>% 
+  arrange(desc(total_pf_pe_reads))
+```
+
+```{r eval=FALSE}
+all_cts <- read.csv("raw_counts/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_raw_counts.csv")
+
+pf_pos_sel <- full_manifest %>% 
+  filter(grepl("Pf\\+|sporozorite", analysis_group))
+
+# pf_pos_sel
+
+to_reqseq <- all_cts[,c("gene_name",pf_pos_sel$sample_id)] %>% 
+  filter(gene_name %in% pf_genes$gene_id) %>% 
+  pivot_longer(cols=-gene_name,
+               names_to="sample_id",
+               values_to="counts") %>% 
+  left_join(., pf_pos_sel, by="sample_id") %>% 
+  group_by(sample_id, analysis_group) %>% 
+  summarise(total_pf_pe_reads=sum(counts)) %>% 
+  ungroup() %>% 
+  arrange(analysis_group, desc(total_pf_pe_reads)) %>% 
+  left_join(., select(full_manifest, sample_id, 
+                      index_1:read2_fastq),
+            by="sample_id")
+
+to_reqseq
+# write.csv(to_reqseq,"liver_stage_Pfalciparum_pos_samples_reqsequence.csv", row.names = FALSE)
+```
+
+
+
 
 ## Boxplots of Expression 
 
