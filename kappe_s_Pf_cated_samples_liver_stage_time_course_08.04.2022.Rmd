@@ -673,7 +673,7 @@ orthoMCL <- read.delim("motif_analysis/homer/groups_OrthoMCL-6.14.txt",
                        header = FALSE) %>% 
   separate(V1, into=c("ortholog_group","accession"), 
            sep=": ", remove=FALSE) %>% 
-  select(ortholog_group,accession,full_result=V1)
+  dplyr::select(ortholog_group,accession,full_result=V1)
 
 head(orthoMCL)
 # dim(orthoMCL) #922,534      1
@@ -1676,36 +1676,11 @@ head(orthoGroups_species)
 
 ### UNIPROT IDs
 
+Required the newest version of R Bioconductor for Uniprot.ws to work properly. 
 
-```{r}
-library(UniProt.ws, lib.loc = "/gpfs/home/jsmi26/R/x86_64-pc-linux-gnu-library/4.1")
 ```
-
-
-```{r}
-orthoGroups_species %>% 
-  janitor::clean_names() %>% 
-  # filter(grepl("Homo sapiens", taxon_name)) %>% 
-  filter(!grepl("-old", accession)) %>% 
-  mutate(taxon_clean=gsub("^([A-Z][a-z]+\\s[a-z]+)\\s.+", "\\1", taxon_name)) %>% 
-  dplyr::select(accession, taxon_name, taxon_clean, 
-         everything())
+Rscript motif_analysis/jaspar2020
 ```
-
-```{r}
-availableUniprotSpecies(pattern="Aspergillus aculeatus")
-options(url.method="libcurl")
-asp_res <- UniProt.ws(taxId=9606)
-```
-
-UniProt.ws_2.34.0
-current: 	2.38.1
-
-```{r}
-BiocManager::install("UniProt.ws", force = TRUE, 
-                     lib="/gpfs/home/jsmi26/R/x86_64-pc-linux-gnu-library/4.1")
-```
-
 
 ### Motifs with possible Orthologs
 
@@ -1713,10 +1688,12 @@ BiocManager::install("UniProt.ws", force = TRUE,
 ```{r}
 opts <- list(collection="CORE",
              matrixtype="PWM")
-all_PFMs <- getMatrixSet(JASPAR2020, opts)
+
+all_PFMs <- readRDS("motif_analysis/jaspar2020_PWMList_CORE_motifs.RDS")
+# all_PFMs <- getMatrixSet(JASPAR2020, opts)
 
 length(all_PFMs) #1646
-# all_PFMs
+# saveRDS(all_PFMs,"motif_analysis/jaspar2020_PWMList_CORE_motifs.RDS")
 ```
 
 ```{r}
@@ -1735,7 +1712,6 @@ motif_annots <- tags(all_PFMs) %>%
 
 motif_annots
 ```
-
 
 ```{r}
 ortho_enr <- motif_enrichment_workflow(targets_df = Day2,
@@ -2003,11 +1979,6 @@ corrplot::corrplot(ap2_similarity)
 
 
 ## AP2 Expression 
-
-```{r}
-head(ap2_ids)
-length(unique(ap2_ids$gene_id))
-```
 
 ```{r}
 ap2_expn <- expression[ap2_ids$gene_id,rownames(input_d456)] %>% 
@@ -2358,26 +2329,22 @@ dim(motif_hits_profiles)
 # write.csv(motif_hits_profiles, "motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
 ```
 
-
 ### Visualization 
 
 #### Time course Clusters 
 
 ```{r}
-sel_tc_hits <- profile_all_bins %>% 
+sel_tc_hits <- with_prom_bg %>% 
   
-  mutate(gene_cluster_factor=as.factor(gene_cluster)) %>% 
-  mutate(p_value=1/10^negLog10P,
-         adj.p_value=1/10^negLog10Padj, 
-         is_significant=ifelse(negLog10P > 1.3, "p < 0.05", "NS"), 
-         # label = paste0("cluster",gene_cluster),
+  mutate(gene_cluster_factor=factor(gsub("cluster", "", gene_cluster), 
+                                    levels=c(1,2,3,8,4,6,5,9,7))) %>% 
+  mutate(is_significant=ifelse(negLog10P > 1.3, "p < 0.05", "NS"), 
          label = gene_cluster,
          old_gene_id = gsub("_D[0-9]|_DLD","",motif)) %>%
   
   group_by(gene_cluster) %>% 
   mutate(plot_fill=case_when(
     negLog10P > 1.2 ~ log2enr,
-    gene_cluster == "Profile2" & negLog10P > 1.09 ~ log2enr,
     TRUE ~ NA_real_)) %>% 
   ungroup() %>% 
   
@@ -2398,16 +2365,16 @@ sel_tc_hits <- profile_all_bins %>%
 
 sel_tc_hits %>% head()
 # length(unique(sel_tc_hits$motif)) # 9 
-table(sel_tc_hits$gene_cluster, sel_tc_hits$is_significant)
+# table(sel_tc_hits$gene_cluster, sel_tc_hits$is_significant)
 ```
 
 ```{r}
 top_motifs_per_clust <- sel_tc_hits %>% 
-  group_by(gene_cluster) %>% 
+  group_by(gene_cluster_factor) %>% 
   dplyr::slice(1) %>% 
   pull(motif, name=motif_factor_groups)
 
-top_motifs_per_clust
+# top_motifs_per_clust
 ```
 
 ```{r fig.height=4, fig.width=10}
@@ -2420,27 +2387,24 @@ plot(clust_motifs)
 ```
 
 ```{r}
-order_motifs_profile <- tail(c(clust_motifs$labels[clust_motifs$order],"PF11_0442"), n=22) %>% 
+order_motifs_profile <- c("PF13_0026") %>% 
+  c(., clust_motifs$labels[clust_motifs$order][1:2]) %>% 
+  c(.,  tail(clust_motifs$labels[clust_motifs$order], n=20)) %>% 
   unique()
-
-# order_motifs_tc <- c(clust_motifs$labels[clust_motifs$order][1:4],
-#                   tail(clust_motifs$labels[clust_motifs$order], n=17)) %>% 
-#   unique()
 
 length(order_motifs_profile)
 table(unique(sel_tc_hits$motif) %in%  order_motifs_profile)
 # unique(sel_tc_hits$motif)[!unique(sel_tc_hits$motif) %in%  order_motifs_profile]
 ```
 
-
 ```{r}
 top_motifs_per_clust_df <- sel_tc_hits %>% 
   group_by(gene_cluster) %>% 
   dplyr::slice(1) 
 
-ap2_expn_top_hits <- purrr::map(top_motifs_per_clust_df$gene_cluster,function(x){
+ap2_expn_top_hits <- purrr::map(top_motifs_per_clust_df$gene_cluster_factor,function(x){
   subset <- top_motifs_per_clust_df %>% 
-    filter(gene_cluster==x)
+    filter(gene_cluster_factor==x)
 
   gene <- subset[["old_gene_id"]]
   # grep(gene,ap2_expn$input_id, value=T)
@@ -2453,62 +2417,15 @@ ap2_expn_top_hits <- purrr::map(top_motifs_per_clust_df$gene_cluster,function(x)
 # ap2_expn_top_hits
 names(ap2_expn_top_hits) <- top_motifs_per_clust_df$motif_factor_groups
 
-lapply(ap2_expn_top_hits, function(x) table(x$gene_id, x$input_id))
-lapply(ap2_expn_top_hits, function(x) table(x$motif, x$input_id))
+# lapply(ap2_expn_top_hits, function(x) table(x$gene_id, x$input_id))
+# lapply(ap2_expn_top_hits, function(x) table(x$motif, x$input_id))
 ```
 
-```{r}
-input <- ap2_expn_top_hits$`cluster1:PF10_0075_D2` %>% 
-  group_by(analysis_factor_group) %>% 
-  mutate(mean=mean(log2_CPM),
-         sd=sd(log2_CPM),
-         ymin=mean-sd,
-         ymax=mean+sd) %>% 
-  ungroup()
-
-
-ggplot(input,
-       aes(x=analysis_factor_group, y=log2_CPM)) +
-  geom_ribbon(aes(ymin=ymin, ymax=ymax, group=input_id),
-              fill = "gold", alpha = 0.075) +
-  geom_boxplot(aes(x=analysis_factor_group,
-                   y=log2_CPM,
-                   fill=analysis_factor_group),
-               outlier.colour=NA,
-               color="grey50",
-               width=0.2,
-               alpha=0.2) +
-  geom_point(aes(color=analysis_factor_group),
-             size=3,alpha=0.8,
-             position = position_jitter(width = 0.15,height = 0)) +
-  scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
-  scale_fill_viridis_d(option="D", begin=0.2, end=0.9) +
-  theme_classic()
-
-
-# ggplot(input,
-#          # mutate(analysis_factor_group=factor(analysis_factor_group, levels=rev(levels(analysis_factor_group)))),
-#        aes(y=analysis_factor_group, x=log2_CPM)) +
-#   ggridges::geom_density_ridges(aes(fill=analysis_factor_group)) +
-#   scale_fill_viridis_d(option="D", begin=0.2, end=0.9) +
-#   theme_classic()
-
-```
-
-```{r}
-profile_labs <- time_course %>% 
-  group_by(combined_gene_clusters) %>% 
-  mutate(label=paste0(combined_gene_clusters,"\n(",length(unique(gene_id))," genes)")) %>% 
-  ungroup() %>% 
-  select(combined_gene_clusters, label) %>% 
-  distinct()
-```
 
 ```{r}
 ap2_summary_stats <- ap2_expn_top_hits %>% 
   bind_rows() %>% 
-  # mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>% 
-  mutate(gene_cluster_factor=as.factor(gene_cluster)) %>% 
+  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
   group_by(gene_cluster_factor, analysis_factor_group,motif) %>% 
   mutate(mean=mean(log2_CPM),
          sd=sd(log2_CPM),
@@ -2518,25 +2435,13 @@ ap2_summary_stats <- ap2_expn_top_hits %>%
          stat="transcription factor",
         .groups = 'keep') %>% 
   ungroup() %>% 
-  select(gene_cluster_factor, analysis_factor_group,motif,masigpro_id,
+  select(gene_cluster_factor, analysis_factor_group,
+         motif,masigpro_id,
          stat,ymin:ymax, mean=log2_CPM) 
 
 
 summary_stats <- expn_d456 %>% 
-  select(-label) %>% 
-  mutate(combined_gene_clusters=case_when(
-    grepl("1$|2$",gene_cluster) ~ "Profile1",
-    grepl("3$|8$", gene_cluster) ~ "Profile2",
-    grepl("4$|6$", gene_cluster) ~ "Profile3",
-    grepl("5$|9$", gene_cluster) ~ "Profile4",
-    grepl("7", gene_cluster) ~ "Profile5"
-  )) %>% 
-  mutate(gene_cluster_factor=as.factor(combined_gene_clusters)) %>% 
-  
-  
-  left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
-  
-  
+  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
   group_by(gene_cluster_factor, analysis_factor_group) %>% 
   mutate(mean=mean(log2_CPM),
          sd=sd(log2_CPM),
@@ -2553,30 +2458,31 @@ summary_stats <- expn_d456 %>%
          motif, stat, mean, ymin:ymax, label) %>% 
   distinct() %>% 
   bind_rows(ap2_summary_stats) %>% 
-  
-  group_by(gene_cluster_factor) %>% 
-  mutate(label=as.character(label)) %>% 
-  mutate_at(vars(label), ~ifelse(is.na(.), label[!is.na(label)], .)) %>% 
+
+  group_by(gene_cluster_factor) %>%
+  mutate(label=as.character(label)) %>%
+  mutate_at(vars(label), ~ifelse(is.na(.), label[!is.na(label)], .)) %>%
   ungroup() %>% 
   
-  group_by(gene_cluster_factor,analysis_factor_group,stat) %>% 
-  mutate(middle_val=median(mean)) %>% 
-  ungroup() %>% 
-  
-  arrange(gene_cluster_factor,analysis_factor_group) %>% 
+  group_by(gene_cluster_factor,analysis_factor_group,stat) %>%
+  mutate(middle_val=median(mean)) %>%
+  ungroup() %>%
+
+  arrange(gene_cluster_factor,analysis_factor_group) %>%
   mutate(label=factor(label, levels=unique(label)))
 
 
-summary_stats
+table(summary_stats$stat)
+table(summary_stats$motif)
+table(summary_stats$label)
 ```
 
 
-```{r fig.height=5, fig.width=10}
+```{r fig.height=5, fig.width=5}
 motif_colors <- c("time-course cluster"="olivedrab3",
-                  set_names(RColorBrewer::brewer.pal(n=6, name = "Set3"), unique(top_motifs_per_clust)))
-# motif_colors["PF14_0533"] <- "burlywood"
+                  set_names(RColorBrewer::brewer.pal(n=9, name = "Set3"), unique(top_motifs_per_clust)))
 
-time_ribbon <- ggplot(data=summary_stats,
+tc_time_ribbon <- ggplot(data=summary_stats,
        aes(x=analysis_factor_group,
            y=mean, 
            group=motif)) +
@@ -2603,33 +2509,12 @@ time_ribbon <- ggplot(data=summary_stats,
         axis.title.x = element_blank(),
         plot.margin = margin(l=5, unit="mm"))
 
-time_ribbon
+# tc_time_ribbon
 ```
 
 ```{r fig.height=5, fig.width=5}
-profile_medians <- expn_d456 %>% 
-    select(-label) %>% 
-  mutate(combined_gene_clusters=case_when(
-    grepl("1$|2$",gene_cluster) ~ "Profile1",
-    grepl("3$|8$", gene_cluster) ~ "Profile2",
-    grepl("4$|6$", gene_cluster) ~ "Profile3",
-    grepl("5$|9$", gene_cluster) ~ "Profile4",
-    grepl("7", gene_cluster) ~ "Profile5"
-  )) %>% 
-  mutate(gene_cluster_factor=as.factor(combined_gene_clusters)) %>% 
-  left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
-  
-  group_by(gene_cluster_factor, masigpro_id) %>% 
-  mutate(median_val_per_sample=median(log2_CPM)) %>% 
-  ungroup() %>% 
-  
-  group_by(gene_cluster_factor, analysis_factor_group) %>% 
-  mutate(median_val=median(log2_CPM)) %>% 
-  ungroup() 
-
-time_cluster <- ggplot(
-  data = profile_medians,
-  # data=expn_d456,
+tc_time_cluster <- ggplot(
+  data=expn_d456,
        aes(x=analysis_factor_group,
            y=median_val_per_sample, 
            color=analysis_factor_group, 
@@ -2647,13 +2532,11 @@ time_cluster <- ggplot(
              nrow=9) +
   theme_classic() +
   theme(
-        # axis.text.x = element_blank(),
-        # axis.text.y = element_text(color="black"),
         axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
         axis.title.x = element_blank(),
         plot.margin = margin(l=5, unit="mm"))
 
-# time_cluster
+# tc_time_cluster
 ```
 
 ```{r fig.height=5, fig.width=5}
@@ -2661,7 +2544,7 @@ time_cluster <- ggplot(
 
 labs <- unique(sel_tc_hits$label) %>% rev()
 
-motif_enr <- ggplot(sel_tc_hits %>% 
+tc_motif_enr <- ggplot(sel_tc_hits %>% 
                       mutate(motif=factor(motif, levels=rev(order_motifs_profile)), 
                              gene_cluster_factor=factor(gene_cluster_factor,
                                                         levels=rev(levels(gene_cluster_factor)))),
@@ -2681,7 +2564,7 @@ motif_enr <- ggplot(sel_tc_hits %>%
         axis.text.y = element_text(angle=90,hjust = 0.5),
         axis.text.x = element_text(angle=20, vjust=1, hjust=1))
 
-motif_enr
+# tc_motif_enr
 ```
 
 ```{r fig.height=5, fig.width=10}
@@ -2713,8 +2596,8 @@ facet_motif_enr <- ggplot(sel_tc_hits,
         axis.text.y = element_text(size=6),
         strip.background = element_blank(),
         strip.text = element_blank())
-  
-facet_motif_enr
+  # 
+# facet_motif_enr
 ```
 
 ```{r warning=FALSE}
@@ -2729,41 +2612,35 @@ top_logos <- purrr::map(top_motifs_per_clust, function(name){
           plot.margin = margin())
 })
 
-# top_logos$`cluster1:PF10_0075_D2`
 ```
 
 ```{r fig.height=10, fig.width=10}
-# layout_rows <- "
-# ABC
-# ABD
-# ABE
-# ABF
-# ABG
-# ABH
-# ABI
-# ABJ
-# ABK
-# "
-
 layout_rows <- "
 ABC
 ABD
 ABE
 ABF
 ABG
+ABH
+ABI
+ABJ
+ABK
 "
 
-# hts <- rbind(rep(1,9),
-#              rep(0.75,9),
-#              rep(0.25,9))
-# 
 wdts <- c(0.5,1,0.75)
 
 
-# pdf("figures/motif_analysis/time_point_profile_ap2_heatmap_seqlogos_tileplot_rows.pdf", height = 12, width=15)
-time_cluster + motif_enr + top_logos[[1]] +
+# svglite("figures/motif_analysis/time_point_cluster_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15,system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+tc_time_cluster + tc_motif_enr + top_logos[[1]] +
   top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
-  # top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
+  top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# dev.off()
+
+# svglite("figures/motif_analysis/time_point_cluster_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+tc_time_ribbon + tc_motif_enr + top_logos[[1]] +
+  top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
+  top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
   plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
 # dev.off()
 ```
@@ -2807,8 +2684,17 @@ sel_profile_hits <- profiles_with_prom_bg %>%
 
 
 head(sel_profile_hits)
-table(sel_profile_hits$gene_cluster, sel_profile_hits$is_significant)
+# table(sel_profile_hits$gene_cluster, sel_profile_hits$is_significant) %>% as.data.frame()
 ```
+
+```{r}
+sel_profile_hits %>% 
+  group_by(gene_cluster, is_significant) %>% 
+  dplyr::count() %>% 
+  pivot_wider(names_from = is_significant, 
+              values_from = n)
+```
+
 
 ```{r}
 top_motifs_per_clust <- sel_profile_hits %>% 
@@ -2994,7 +2880,7 @@ time_ribbon <- ggplot(data=summary_stats,
         axis.title.x = element_blank(),
         plot.margin = margin(l=5, unit="mm"))
 
-time_ribbon
+# time_ribbon
 ```
 
 ```{r fig.height=5, fig.width=5}
@@ -3133,7 +3019,7 @@ ABG
 wdts <- c(0.5,1,0.75)
 
 
-# pdf("figures/motif_analysis/time_point_profile_ap2_heatmap_seqlogos_tileplot_rows.pdf", height = 12, width=15)
+# pdf("figures/motif_analysis/time_point_profile_heatmap_seqlogos_tileplot_rows.pdf", height = 12, width=15)
 time_cluster + motif_enr + top_logos[[1]] +
   top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
   plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
