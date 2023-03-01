@@ -44,12 +44,11 @@ conflicted::conflict_prefer("arrange","dplyr")
 conflicted::conflict_prefer("mutate","dplyr")
 ```
 
-Note about fonts:
 
 ```{r}
 #https://www.tidyverse.org/blog/2021/02/svglite-2-0-0/
-system_fonts = list(sans = "Open Sans")
-systemfonts::system_fonts()
+# system_fonts = list(sans = "Open Sans")
+# systemfonts::system_fonts()
 ```
 
 
@@ -1637,17 +1636,23 @@ Acc: A representative protein accession number in Genbank for the transcription 
 ## Orthologous Hits
 
 ```{r}
-# 597 annotations could be related to TF activity
 GO_annots_TF <- GO_annots %>% 
   filter(grepl("DNA-binding|DNA binding|transcription factor", go_term_name))
 
 length(unique(GO_annots_TF$gene_id))
-GO_annots_TF %>% 
-  group_by(go_term_name, go_id) %>% 
-  dplyr::count() %>% 
-  arrange(desc(n)) %>% 
-  ungroup() %>% 
-  mutate(Total=sum(n))
+# GO_annots_TF %>% 
+#   group_by(go_term_name, go_id) %>% 
+#   dplyr::count() %>% 
+#   arrange(desc(n)) %>% 
+#   ungroup() %>% 
+#   mutate(Total=sum(n))
+```
+
+```{r}
+fData(cb_eset) %>% 
+  filter(gene_id %in% GO_annots_TF$gene_id) %>% 
+  arrange(gene_name)
+# GO_annots_TF 
 ```
 
 ```{r}
@@ -1663,98 +1668,649 @@ dim(orthoGroups) #5389   12
 ```
 
 ```{r}
-orthoGroups_species <- read.delim("motif_analysis/orthogroups_pf_to_all_species.txt", sep = "\t") %>% 
+orthoGroups_species <- read.delim("motif_analysis/orthogroups_pf_to_all_species_v2.txt", sep = "\t") %>% 
   janitor::clean_names() %>% 
   filter(!grepl("-old", accession)) %>% 
-  mutate(taxon_clean=gsub("^([A-Z][a-z]+\\s[a-z]+)\\s.+", "\\1", taxon_name)) %>% 
-  dplyr::select(accession, taxon_name, taxon_clean, 
+  mutate(taxon_clean=gsub("^([A-Z][a-z]+\\s[a-z]+)\\s.+", "\\1", taxon_name),
+         gene_id=gsub("^[a-z].+\\|","", accession)) %>% 
+  dplyr::select(accession,gene_id,
+                taxon_name, taxon_clean, 
          everything())
 
-
 head(orthoGroups_species)
+length(unique(orthoGroups_species$taxon_clean)) #554 
+# dim(orthoGroups_species) #1,533,059
 ```
 
-### UNIPROT IDs
+
+### Uniprot IDs
 
 Required the newest version of R Bioconductor for Uniprot.ws to work properly. 
 
 ```
-Rscript motif_analysis/jaspar2020
+Rscript motif_analysis/uniprot.ws_lookup.R
 ```
 
-### Motifs with possible Orthologs
+```{r}
+ortholog_search_res <- dir("motif_analysis/uniprot_ids",
+                           pattern = "*.RDS", 
+                           full.names = TRUE)
 
+ortholog_uniprotIDs <- purrr::map_dfr(ortholog_search_res, function(df){
+  readRDS(df) %>% 
+    janitor::clean_names() %>% 
+    distinct()
+}) %>% 
+  inner_join(., orthoGroups_species, by=c("from"="gene_id")) %>% 
+  distinct()
+
+
+dim(ortholog_uniprotIDs) #772,570     18
+head(ortholog_uniprotIDs)
+``` 
+
+```{r}
+ortholog_uniprotIDs %>% 
+  group_by(organism) %>% 
+  dplyr::count() %>% 
+  nrow() # 571 taxons 
+```
+
+
+### Motifs with possible Orthologs
 
 ```{r}
 opts <- list(collection="CORE",
              matrixtype="PWM")
 
-all_PFMs <- readRDS("motif_analysis/jaspar2020_PWMList_CORE_motifs.RDS")
-# all_PFMs <- getMatrixSet(JASPAR2020, opts)
+all_PFMs <- readRDS("motif_analysis/JASPAR2022_PWMs.RDS")
 
-length(all_PFMs) #1646
-# saveRDS(all_PFMs,"motif_analysis/jaspar2020_PWMList_CORE_motifs.RDS")
+length(all_PFMs) #1956
 ```
 
 ```{r}
 motif_annots <- tags(all_PFMs) %>% 
   c(name(all_PFMs)) %>% 
+  c(matrixClass(all_PFMs) %>%
+      set_names(paste0(names(matrixClass(all_PFMs)), ".class"))) %>% 
   unlist() %>% 
   data.frame(values=.)  %>% 
-  rownames_to_column("motif") %>%
-  arrange(motif) %>% 
+  rownames_to_column("motif") %>% 
+  arrange(motif) %>%
   mutate(info=str_split_fixed(motif, "\\.", n=3)[,3]) %>%
   mutate(info=ifelse(info=="" & grepl("[0-9]$", motif), "gene_name", info)) %>%
   mutate(motif=gsub("(^MA.+\\.[0-9]{1})\\.[a-z0-9].+$", "\\1", motif) %>%
            gsub("_.+", "", .)) %>%
-  mutate(info=gsub("\\.[0-9]+","", info)) 
+  mutate(info=gsub("\\.[0-9]+","", info))
 
 
-motif_annots
+# motif_annots
 ```
 
 ```{r}
-ortho_enr <- motif_enrichment_workflow(targets_df = Day2,
-                                      PWMs = c(all_hits,diff),
+ortholog_motifs_ids <- motif_annots %>% 
+  filter(values %in% ortholog_uniprotIDs$entry) %>% 
+  pull(motif)
+
+
+sel_motif_annots <- motif_annots %>% 
+  filter(motif %in% ortholog_motifs_ids) %>% 
+  pivot_wider(names_from = info,
+              values_from = values) %>% 
+  left_join(., ortholog_uniprotIDs, by=c("acc"="entry")) %>% 
+  left_join(., orthoGroups %>% 
+                  # filter(ortholog_group %in% sel_motif_annots$group_id) %>% 
+                  rename_at(vars(gene_id:p_fam_description), ~paste0("pfal_", .)),
+            by = c("group_id"="ortholog_group")) %>% 
+  select(motif:acc, group_id,
+         pfal_gene_id,
+         pfal_product_description,
+         everything()) %>% 
+  arrange(group_id)
+
+
+sel_motif_annots
+# write.csv(sel_motif_annots, "motif_analysis/jaspar2022_orthologs.csv", row.names = F)
+```
+
+
+
+```{r}
+sapply(all_PFMs[sel_motif_annots$motif], function(x) maxScore(Matrix(x))) %>% 
+  data.frame(score=.) %>% 
+  rownames_to_column("motif") %>% 
+  arrange(score) %>% 
+  mutate(percent_75=score*0.75, 
+         percent_90=score*0.9)
+```
+
+```{r}
+ortho_day2_enr <- motif_enrichment_workflow(targets_df = Day2,
+                                      PWMs = all_PFMs[sel_motif_annots$motif],
                                       proms_gr = pf_proms_gr,
                                       genome_bs = genome,
-                                      col_to_bin = "logFC")
+                                      col_to_bin = "logFC",
+                                      use_bg_regions = TRUE)
+
+# saveRDS(ortho_day2_enr,"motif_analysis/monaLisa/day2_vs_spz_orthologs_monaLisa_results.RDS")
 ```
 
 ```{r}
-ortho_enr$enrichement_res
-ortho_enr_df <- create_monaLisa_df(ortho_enr$enrichement_res)
-dim(ortho_enr_df)
+# ortho_enr$enrichement_res
+ortho_enr_df <- create_motif_df(ortho_day2_enr,col_to_bin = "logFC") %>% 
+  left_join(., sel_motif_annots, by="motif") %>% 
+  select(motif, gene_name, class, family, everything()) %>% 
+   arrange(desc(negLog10P))
+
+# dim(ortho_enr_df)
+ortho_enr_df
+# write.csv(ortho_enr_df,"motif_analysis/monaLisa/day2_vs_spz_orthologs_monaLisa_results.csv", row.names = FALSE)
 ```
 
+```{r}
+tc_clusters <- time_course %>% 
+  mutate(gene_cluster = paste0("cluster", gene_cluster) %>% as.factor()) %>% 
+  select(gene_id, gene_cluster)
+
+tc_profiles <- time_course %>% 
+  mutate(combined_gene_clusters=as.factor(combined_gene_clusters)) %>% 
+  select(gene_id, combined_gene_clusters) %>% 
+  arrange(combined_gene_clusters)
+```
 
 ```{r eval=FALSE}
-ortho_cluster_motifs <- lapply(gene_clusts_dfs, 
-                         motif_enrichment_workflow,
-                         PWMs = c(all_hits,diff),
-                         col_to_bin = "betaTime",
-                         proms_gr = pf_proms_gr, 
-                         genome_bs = genome)
+cluster_nums <- unique(tc_clusters$gene_cluster)
+ortho_cluster_motifs <- list()
+for (cluster in cluster_nums){
+  
+  input <- tc_clusters[tc_clusters$gene_cluster == cluster, ] %>% 
+    droplevels()
 
-names(ortho_cluster_motifs) <- names(gene_clusts_dfs)
+  enr <- motif_enrichment_workflow(targets_df = input,
+                            col_to_bin = "gene_cluster",
+                            PWMs = all_PFMs[sel_motif_annots$motif],
+                            proms_gr = pf_proms_gr,
+                            genome_bs = genome,
+                            make_bins = FALSE,
+                            use_bg_regions = TRUE)
+  
+  ortho_cluster_motifs[[cluster]] <- enr
+}
+
+# saveRDS(ortho_cluster_motifs,"motif_analysis/monaLisa/time_course_ortholog_results_list.RDS")
 ```
 
 ```{r}
-time_course_res <- purrr::map_dfr(names(ortho_cluster_motifs), function(x) {
-  create_monaLisa_df(ortho_cluster_motifs[[x]]$enrichment_res, bins = 1) %>% 
-    mutate(group=x) %>% 
-    select(group, everything())
-}) %>% 
-  left_join(., motif_annots, by="motif") %>% 
-  left_join(., genes_to_search, by=c("gene_name")) %>% 
-  select(group, gene_name, acc, everything())
+ortho_cluster_motifs_dfs <- purrr::map_dfr(ortho_cluster_motifs, create_motif_df) %>% 
+  left_join(., sel_motif_annots, by="motif") %>% 
+  select(motif,gene_cluster, gene_name,pfal_gene_id, class, family, everything()) %>% 
+  arrange(desc(negLog10P))
 
-head(time_course_res)
-dim(time_course_res) #180  17
+# write.csv(ortho_cluster_motifs_dfs,"motif_analysis/monaLisa/time_course_orthologs_results.csv", row.names = FALSE)
 
-# length(unique(time_course_res$gene_name)) #
+ortho_cluster_motifs_dfs %>%
+  filter(negLog10P > 1.2) %>%
+  group_by(gene_cluster)
+  # dplyr::slice(1)
 ```
 
+```{r eval=FALSE}
+profile_nums <- unique(tc_profiles$combined_gene_clusters)
+ortho_profile_motifs <- list()
+for (profile in profile_nums){
+  
+  input <- tc_profiles[tc_profiles$combined_gene_clusters == profile, ] %>% 
+    droplevels()
+
+  enr <- motif_enrichment_workflow(targets_df = input,
+                            col_to_bin = "combined_gene_clusters",
+                            PWMs = all_PFMs[sel_motif_annots$motif],
+                            proms_gr = pf_proms_gr,
+                            genome_bs = genome,
+                            make_bins = FALSE,
+                            use_bg_regions = TRUE)
+  
+  ortho_profile_motifs[[profile]] <- enr
+}
+
+# saveRDS(ortho_profile_motifs, "motif_analysis/monaLisa/time_course_profiles_orthologs_results_list.RDS")
+```
+
+```{r}
+ortho_profile_motifs_dfs <- purrr::map_dfr(ortho_profile_motifs, create_motif_df) %>% 
+  left_join(., sel_motif_annots, by="motif") %>% 
+  select(motif,gene_cluster, gene_name,pfal_gene_id, class, family, everything()) %>% 
+  arrange(gene_cluster, desc(negLog10P))
+
+# write.csv(ortho_profile_motifs_dfs,"motif_analysis/monaLisa/time_course_profiles_orthologs_results.csv", row.names = FALSE)
+
+ortho_profile_motifs_dfs %>%
+  filter(negLog10P > 1.2) %>%
+  group_by(gene_cluster)
+  # dplyr::slice(1)
+```
+
+### Visualization Motif Enrichment / Seq Logos 
+
+```{r}
+ortho_cluster_motifs_dfs <- read.csv("motif_analysis/monaLisa/time_course_orthologs_results.csv")
+
+input <- ortho_cluster_motifs_dfs  %>%
+  mutate(gene_cluster_factor=factor(gsub("cluster", "", gene_cluster),
+                                    levels=c(1,2,3,8,4,6,5,9,7)),
+         label = gene_cluster) %>%
+  group_by(gene_cluster) %>%
+  mutate(plot_fill=case_when(
+    negLog10P > 1.2 ~ log2enr,
+    TRUE ~ NA_real_)) %>%
+  ungroup() %>%
+
+  group_by(motif) %>%
+  filter(!all(is.na(plot_fill))) %>%
+  ungroup() %>%
+
+  mutate(motif_factor_groups=paste0(label,":",motif)) %>%
+  group_by(gene_cluster) %>%
+  arrange(desc(plot_fill), .by_group = T) %>%
+  ungroup() %>%
+  mutate(motif_factor_groups=factor(motif_factor_groups,
+                                    levels=rev(motif_factor_groups))) %>%
+  select(gene_cluster,
+         gene_cluster_factor,
+         motif_factor_groups,
+         plot_fill,log2enr, everything())
+
+head(input)
+length(unique(input$motif))
+```
+
+```{r}
+table(input$gene_cluster,input$negLog10P >= 1.2)
+```
+
+```{r}
+vals <- input %>% 
+  mutate(plot_fill=ifelse(is.na(plot_fill), 0, plot_fill)) %>% 
+  pull(plot_fill, name=motif)
+  
+clust_motifs <- hclust(dist(vals, method="euclidean"))
+# plot(clust_motifs)
+
+order_motifs_profile <-
+  clust_motifs$labels[clust_motifs$order][1] %>%
+  c(.,  tail(clust_motifs$labels[clust_motifs$order], n=7)) %>%
+  unique()
+
+input_withOrders <- input %>%
+  mutate(motif=factor(motif, 
+                      levels=rev(order_motifs_profile)),
+         gene_cluster_factor=factor(gene_cluster_factor, 
+                                    levels=rev(levels(gene_cluster_factor))))
+
+```
+
+
+```{r}
+pf_ortho_geneids <- input %>% 
+  group_by(gene_cluster) %>% 
+  arrange(desc(negLog10P), .by_group = TRUE) %>% 
+  dplyr::slice(1) %>% 
+  ungroup %>% 
+  filter(!is.na(plot_fill))
+
+
+expn_top_hits <- expression[unique(pf_ortho_geneids$pfal_gene_id), rownames(input_d456)] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols=matches("Pf"),
+               names_to="masigpro_id",
+               values_to = "log2_CPM") %>% 
+  left_join(., design_input, by="masigpro_id") %>% 
+  left_join(., select(pf_ortho_geneids, gene_cluster:pfal_gene_id),
+            by=c("gene_id"="pfal_gene_id"))
+
+
+
+head(expn_top_hits)
+dim(expn_top_hits) 
+```
+
+
+```{r}
+expn_top_hits %>% 
+  filter(is.na(gene_cluster_factor))
+```
+
+```{r}
+summary_stats_TF <- expn_top_hits %>% 
+  group_by(gene_cluster_factor, 
+           analysis_factor_group,
+           motif) %>% 
+  mutate(mean=mean(log2_CPM),
+           sd=sd(log2_CPM),
+           cv=sd/mean, 
+           ymin=mean-sd,
+           ymax=mean+sd,
+           stat="transcription factor"
+          # .groups = 'keep'
+         ) %>% 
+  ungroup() %>% 
+  select(gene_cluster_factor,
+         analysis_factor_group,
+         masigpro_id,
+         motif, stat, mean, 
+         ymin:ymax) %>% 
+  distinct()
+
+summary_stats_TF
+```
+
+```{r}
+summary_stats <- expn_d456 %>% 
+  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
+  group_by(gene_cluster_factor, analysis_factor_group) %>% 
+  mutate(mean=mean(log2_CPM),
+         sd=sd(log2_CPM),
+         cv=sd/mean, 
+         ymin=mean-sd,
+         ymax=mean+sd) %>% 
+  group_by(gene_cluster_factor,analysis_factor_group, masigpro_id) %>% 
+  mutate(stat="time-course cluster",
+          mean=mean(log2_CPM),
+          motif="time-course cluster",
+         .groups = 'keep') %>% 
+  ungroup() %>%
+  select(gene_cluster_factor,
+         analysis_factor_group,
+         masigpro_id,
+         motif, stat, mean, 
+         ymin:ymax, label) %>% 
+  distinct() %>% 
+  bind_rows(summary_stats_TF) %>% 
+
+  group_by(gene_cluster_factor) %>%
+  mutate(label=as.character(label)) %>%
+  mutate_at(vars(label), ~ifelse(is.na(.), label[!is.na(label)], .)) %>%
+  ungroup() %>%
+
+  group_by(gene_cluster_factor,analysis_factor_group,stat) %>%
+  mutate(middle_val=median(mean)) %>%
+  ungroup() %>%
+
+  arrange(gene_cluster_factor,analysis_factor_group) %>%
+  mutate(label=factor(label, levels=unique(label)))
+
+
+summary_stats
+# table(summary_stats$stat)
+# table(summary_stats$motif)
+# table(summary_stats$label)
+```
+
+```{r}
+summary_stats %>% 
+  filter(is.na())
+```
+
+```{r}
+  time_ribbon <- ggplot(data=summary_stats,
+         aes(x=analysis_factor_group,
+             y=mean, 
+             group=motif)) +
+    geom_ribbon(aes(ymin=ymin, 
+                    ymax=ymax,
+                    group=motif, 
+                    fill=motif),
+                alpha=0.15) +
+    geom_line(aes(x=analysis_factor_group, y=middle_val, group=motif), 
+              linetype="dashed",
+              linewidth=0.5, alpha=0.5) +
+    geom_point(aes(color=analysis_factor_group, shape=stat),
+               size = 3, alpha=0.7) +
+    facet_wrap(~label, scales='free_y', nrow=9) +
+    labs(y="log2 (CPM)", x="") +
+    scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+    # scale_fill_manual(values=motif_colors) +
+    theme_classic() +
+    guides(color = guide_legend(title = "Time point")) +
+    theme(
+          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
+          axis.text.y = element_text(color="black"),
+          axis.title.x = element_blank(),
+          plot.margin = margin(l=5, unit="mm"))
+
+time_ribbon
+```
+
+
+```{r}
+create_motif_enr_plots <- function(enr_df, 
+                                   factor_column="gene_cluster_factor",
+                                   motif_order=NULL,
+                                   summary_stats, 
+                                   expn_df_long,
+                                   PWMlist=AP2_PWMlist){
+  # required columns in enr_df: motif_factor_groups, motif, plot_fill, label
+  # required columns in summary_stats: analysis_factor_group, motif,mean, middle_val, ymin, ymax, stat
+  # required columns in expn_df_long: analysis_factor_group, median_val_per_sample
+  top_motifs_per_clust <- enr_df %>% 
+    group_by( !! as.name(factor_column) ) %>% 
+    dplyr::slice(1) %>% 
+    pull(motif, name=motif_factor_groups)
+  
+  top_motifs_per_clust_df <- enr_df %>% 
+    group_by(gene_cluster) %>% 
+    dplyr::slice(1) 
+
+  num <- unique(summary_stats$motif)
+  motif_colors <- set_names(RColorBrewer::brewer.pal(n=num, name = "Set3"),
+                              unique(top_motifs_per_clust))
+ 
+  time_ribbon <- ggplot(data=summary_stats,
+         aes(x=analysis_factor_group,
+             y=mean, 
+             group=motif)) +
+    geom_ribbon(aes(ymin=ymin, 
+                    ymax=ymax,
+                    group=motif, 
+                    fill=motif),
+                alpha=0.15) +
+    geom_line(aes(x=analysis_factor_group, y=middle_val, group=motif), 
+              linetype="dashed",
+              linewidth=0.5, alpha=0.5) +
+    geom_point(aes(color=analysis_factor_group, shape=stat),
+               size = 3, alpha=0.7) +
+    facet_wrap(~label, scales='free_y', nrow=9) +
+    labs(y="log2 (CPM)", x="") +
+    scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+    scale_fill_manual(values=motif_colors) +
+    theme_classic() +
+    guides(color = guide_legend(title = "Time point")) +
+    theme(
+          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
+          axis.text.y = element_text(color="black"),
+          axis.title.x = element_blank(),
+          plot.margin = margin(l=5, unit="mm"))
+  
+  time_cluster <- ggplot(
+    data=expn_df_long,
+         aes(x=analysis_factor_group,
+             y=median_val_per_sample, 
+             color=analysis_factor_group, 
+             group=analysis_factor_group)) +
+    geom_line(aes(x=analysis_factor_group, y=median_val, 
+                  group="gene_cluster_factor"),
+              size=0.5, color="black", alpha=0.75,
+              linetype="longdash") +
+    geom_point(size=2) +
+    scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+    labs(y="log2 (CPM)", x="") +
+    guides(color = guide_legend(title = "Time point")) +
+    facet_wrap(~label,
+               scales = 'fixed',
+               nrow=9) +
+    theme_classic() +
+    theme(
+          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
+          axis.title.x = element_blank(),
+          plot.margin = margin(l=5, unit="mm"))
+  
+  labs <- unique(enr_df$label) %>% rev()
+  motif_enr <- ggplot(enr_df,
+                      aes(x=motif, y="gene_cluster_factor", fill=plot_fill)) +
+    geom_tile(height=0.8, width=0.85) +
+    scale_x_discrete(expand = c(0,0)) +
+    scale_y_discrete(expand = c(0,0),
+                     labels=labs) +
+    scale_color_manual(values=c("NS"=NA,"p < 0.05"="black")) +
+    scale_fill_gradient(high="firebrick4",
+                        low=alpha("firebrick1",0.2),
+                        na.value = alpha("grey80", 0.1)) +
+    guides(fill = guide_colorbar(title = "log2 enrichment")) +
+    labs(y="",x="") +
+    theme_classic() +
+    theme(axis.text = element_text(color="black"), 
+          axis.text.y = element_text(angle=90,hjust = 0.5),
+          axis.text.x = element_text(angle=20, vjust=1, hjust=1))
+  
+  clust_labs <- enr_df %>% pull(label, name="gene_cluster_factor")
+  incl_hits <- enr_df %>% 
+                group_by(motif_factor_groups) %>% 
+                filter(!is.na(plot_fill)) %>% 
+                ungroup()
+  
+  top_logos <- purrr::map(top_motifs_per_clust, function(name){
+    ggseqlogo(PWMlist[[name]]@profileMatrix) +
+      labs(title=name) +
+      scale_x_continuous(expand = c(0,0), 
+                         limits = c(4,21),
+                         breaks=seq(5,20,by=5)) +
+      theme(plot.title = element_text(size=10,vjust = 0.5, hjust = 0.5),
+            axis.text = element_text(size=10),
+            plot.margin = margin())
+  })
+  
+  return(time_ribbon=time_ribbon, time_cluster=time_cluster,motif_enr=motif_enr, top_logos=top_logos)
+}
+```
+
+```{r fig.height=10, fig.width=10}
+layout_rows <- "
+ABC
+ABD
+ABE
+ABF
+ABG
+ABH
+ABI
+ABJ
+ABK
+"
+
+wdts <- c(0.5,1,0.75)
+
+
+# svglite("figures/motif_analysis/time_point_cluster_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15,system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+tc_time_cluster + tc_motif_enr + top_logos[[1]] +
+  top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
+  top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# dev.off()
+
+# svglite("figures/motif_analysis/time_point_cluster_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+tc_time_ribbon + tc_motif_enr + top_logos[[1]] +
+  top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
+  top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# dev.off()
+```
+
+
+
+### Ortholog Expression 
+
+```{r}
+ortholog_pf_ids <- orthoGroups %>% 
+  inner_join(., select(sel_motif_annots, motif,motif_gene_name=gene_name, motif_acc=acc, 
+                       group_id,motif_class=class),
+             by=c("ortholog_group"="group_id"),
+             multiple="all") %>% 
+  group_by(gene_id) %>% 
+  mutate(across(.cols = c(motif:motif_acc,motif_class),
+                .fns =  ~paste(unique(.), collapse = " / "))) %>% 
+  ungroup() %>% 
+  distinct() %>% 
+  mutate(label=paste(motif_gene_name,gene_id,sep=":")) %>% 
+  select(gene_id,ortholog_group,label,
+         gene_name_or_symbol,p_fam_description,motif:motif_class,
+         everything())
+
+ortholog_pf_ids
+```
+
+```{r}
+orth_tfs_expn <- expression[ortholog_pf_ids$gene_id, rownames(input_d456)] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols=matches("Pf"),
+               names_to="masigpro_id",
+               values_to = "log2_CPM") %>% 
+  left_join(., design_input, by="masigpro_id") %>% 
+  left_join(.,ortholog_pf_ids, by="gene_id") %>% 
+  select(gene_id,label, everything())
+
+
+head(orth_tfs_expn)
+# dim(orth_tfs_expn) # 168  10
+```
+
+```{r fig.height=10, fig.width=10}
+# pdf("figures/combat_seq/ortholog_motif_gene_expression_boxplot.pdf", height = 10, width=10)
+ggplot(orth_tfs_expn, aes(x=analysis_factor_group, y=log2_CPM)) +
+  geom_boxplot(aes(fill=analysis_factor_group),
+               alpha=0.3,
+               outlier.colour = NA) +
+  geom_point(aes(color=analysis_factor_group),
+             size=2, alpha=0.7,
+             position = position_jitter()) +
+  facet_wrap(~label, scales = "free_x", ncol=3) +
+  scale_fill_viridis_d(direction = -1) +
+  scale_color_viridis_d(end=0.925,direction = -1) +
+  theme_classic() +
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle=25, vjust=1, hjust=1))
+# dev.off()
+```
+
+```{r}
+ortho_tfs_mat <- expression[ortholog_pf_ids$gene_id,rownames(input_d456)]
+rownames(ortho_tfs_mat) <- unique(ortholog_pf_ids$label)
+
+
+```
+
+```{r}
+# pdf("figures/combat_seq/ortholog_motif_heatmap_log2CPM_heatmap.pdf", height = 10, width = 10)
+heat_colors <- colorRampPalette(viridis::plasma(10))(299)
+pheatmap::pheatmap(ortho_tfs_mat,
+                   annotation_col = select(design_input, analysis_factor_group),
+                   color = heat_colors)
+# dev.off()
+```
+
+```{r}
+paletteLength <- 299
+range_expn <- range(scale(t(ortho_tfs_mat)))
+myBreaks <- c(seq(range_expn[1], 0, length.out=ceiling(paletteLength/2) + 1), 
+              seq(range_expn[2]/paletteLength, range_expn[2], length.out=floor(paletteLength/2)))
+
+# pdf("figures/combat_seq/ortholog_motif_heatmap_row_zscores_heatmap.pdf", height = 10, width = 10)
+pheatmap::pheatmap(ortho_tfs_mat,
+                   annotation_col = select(design_input, analysis_factor_group),
+                   scale = "row",breaks = myBreaks,
+                   color = colorRampPalette(viridis::turbo(10))(299))
+# dev.off()
+```
 
 ### Search Homer Known Results
 
@@ -2091,8 +2647,6 @@ day2_enr <- readRDS("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
 day2_enr[["enrichment_res"]] <- day2_enr$enrichement_res # spelling error 
 day2_AP2_results <- read.csv("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv")
 
-
-
 ```{r}
 day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
                       sep=",",comment.char = "#")
@@ -2254,11 +2808,11 @@ rowData(profile_motifs$Profile1$enrichment_res)
 ```
 
 
-## Count Frequencies and hits 
+### Count Frequencies and hits 
 
 ```{r}
 cluster_hits <- purrr::map_dfr(names(cluster_motifs), function(motif_res){
-  print(motif_res)
+  
   hits <- findMotifHits(query = AP2_PWMlist,
               subject = cluster_motifs[[motif_res]]$target_seqs,
               method = "matchPWM",
@@ -2267,29 +2821,31 @@ cluster_hits <- purrr::map_dfr(names(cluster_motifs), function(motif_res){
     as.data.frame() %>%
     group_by(pwmid) %>%
     summarise(mean_score=mean(score),
-              transcript_hits = paste0(seqnames, collapse = "; "),
+              transcript_hits = paste0(unique(seqnames) %>% as.character(), collapse = "; "),
               .groups = 'keep') %>%
     ungroup() %>%
+    mutate(gene_cluster=motif_res) %>% 
     select(motif=pwmid,
-           # mean_score,
-           transcript_hits) %>%
-    left_join(., filter(with_prom_bg,
-                        gene_cluster == motif_res),
-              by=c("motif")) %>%
-    select(motif,gene_cluster:expForegroundWgtWithHits,
-           sumForegroundWgtWithHits:sumBackgroundWgtWithHits,
-           everything()) %>%
-    arrange(desc(negLog10P))
-
+           gene_cluster,
+           transcript_hits) 
 })
 
 # cluster_hits
 ```
 
 ```{r}
-head(cluster_hits)
-# write.csv(cluster_hits, "motif_analysis/monaLisa/time_course_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
+cluster_hits_enr <- with_prom_bg %>% 
+    left_join(., cluster_hits,
+              by=c("motif", "gene_cluster")) %>% 
+    select(motif,gene_cluster:expForegroundWgtWithHits,
+           sumForegroundWgtWithHits:sumBackgroundWgtWithHits,
+           everything()) %>%
+    arrange(gene_cluster, desc(negLog10P))
+    
+dim(cluster_hits_enr)
+# write.csv(cluster_hits_enr, "motif_analysis/monaLisa/time_course_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
 ```
+
 
 ```{r}
 motif_hits_profiles <- purrr::map_dfr(names(profile_motifs), function(motif_res){
@@ -2302,31 +2858,30 @@ motif_hits_profiles <- purrr::map_dfr(names(profile_motifs), function(motif_res)
     as.data.frame() %>%
     group_by(pwmid) %>%
     summarise(mean_score=mean(score),
-              transcript_hits = paste0(seqnames, collapse = "; "),
+              transcript_hits = paste0(unique(seqnames) %>% as.character(), collapse = "; "),
               .groups = 'keep') %>%
     ungroup() %>%
+    mutate(combined_gene_clusters=motif_res) %>% 
     select(motif=pwmid,
-           # mean_score,
-           transcript_hits) %>%
-    left_join(., filter(profiles_with_prom_bg,
-                        combined_gene_clusters == motif_res),
-              by=c("motif")) %>%
+           combined_gene_clusters,
+           transcript_hits)
+
+})
+```
+```{r}
+profile_hits_enr <- profiles_with_prom_bg %>% 
+    left_join(., motif_hits_profiles,
+              by=c("motif", "combined_gene_clusters")) %>% 
     select(motif,combined_gene_clusters:expForegroundWgtWithHits,
            sumForegroundWgtWithHits:sumBackgroundWgtWithHits,
            everything()) %>%
-    arrange(desc(negLog10P))
-
-})
-
-# names(motif_hits_profiles) <- names(profile_motifs)
+    arrange(combined_gene_clusters, desc(negLog10P))
 ```
 
 ```{r}
-head(motif_hits_profiles)
-dim(motif_hits_profiles)
-
-# table(motif_hits_profiles$combined_gene_clusters) # missing motifs that were NAs 
-# write.csv(motif_hits_profiles, "motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
+head(profile_hits_enr)
+dim(profile_hits_enr)
+# write.csv(profile_hits_enr, "motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
 ```
 
 ### Visualization 
@@ -3911,9 +4466,9 @@ purrr::map(names(res),function(df_ID){
 
 ```{bash}
 destination="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/"
-rsync -av --exclude .DS_Store --exclude degree1 time_course/masigpro $destination
-rsync -av --exclude .DS_Store figures $destination 
-rsync -av --exclude .DS_Store --exclude plasmoDB --exclude PlasmoDB GO_enrichment  $destination
+#rsync -av --exclude .DS_Store --exclude degree1 time_course/masigpro $destination
+#rsync -av --exclude .DS_Store figures $destination 
+#rsync -av --exclude .DS_Store --exclude plasmoDB --exclude PlasmoDB GO_enrichment  $destination
 rsync -av --exclude .DS_Store motif_analysis --exclude results_jaspar2020_db --exclude outfiles $destination
 ```
 

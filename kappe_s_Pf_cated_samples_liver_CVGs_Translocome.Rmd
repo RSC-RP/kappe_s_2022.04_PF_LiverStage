@@ -24,34 +24,32 @@ library(tibble)
 library(magrittr)
 library(dplyr)
 library(stringr)
+library(ComplexHeatmap)
 library(ggplot2)
 library(gridExtra)
 library(ggpubr)
 library(patchwork)
 library(limma)
 library(edgeR)
+
+
 library(SummarizedExperiment)
 library(patchwork)
 library(maSigPro)
 library(svglite)
 suppressPackageStartupMessages(library(mclust))
+
+library(Biostrings)
 ```
 
-```{r}
-conflicted::conflict_prefer("filter","dplyr")
-conflicted::conflict_prefer("select","dplyr")
-conflicted::conflict_prefer("arrange","dplyr")
-conflicted::conflict_prefer("mutate","dplyr")
-```
 
 Note about fonts:
 
 ```{r}
 #https://www.tidyverse.org/blog/2021/02/svglite-2-0-0/
-system_fonts = list(sans = "Open Sans")
-systemfonts::system_fonts()
+# system_fonts = list(sans = "Open Sans")
+# systemfonts::system_fonts()
 ```
-
 
 # Define Functions 
 
@@ -523,7 +521,70 @@ create_pf_heatmaps <- function(TMMCPM,sample_annots, gene_annots,
 }
 ```
 
+```{r}
+aa_motif_search <- function(motif, aa_to_search){
+  
+  outname <- str_split_fixed(names(aa_to_search), pattern = " | ", n=2)[,1] %>% 
+    gsub("-",".", .)
+  matches <- str_extract_all(string = as.character(aa_to_search),
+                             pattern = motif) %>% 
+    set_names(outname) 
+  coords <- str_locate_all(string = as.character(aa_to_search), 
+               pattern = motif) %>% 
+    set_names(outname) 
+          
 
+  idx <- sapply(matches,length) > 0
+  matches[!idx] <- ""
+  toFill <- max(sapply(matches,length))
+  matches_clean <- lapply(matches, function(x){
+    n <- length(x)
+    dummy_n <- toFill - n
+    x <- c(x[1:n], rep("",dummy_n))
+  }) %>%
+  as.data.frame() %>%
+  pivot_longer(cols = everything(),
+               names_to = "aa_name",
+               values_to = "match") %>% 
+  arrange(aa_name) %>% 
+  group_by(aa_name) %>% 
+  filter(!duplicated(match)) %>% 
+  mutate(keep=case_when(
+    n() > 1 ~ !grepl("^$", match),
+    TRUE ~ TRUE
+  )) %>%
+  filter(keep) %>% 
+  summarise(n_matches=n(),
+            match=paste(match[match != ""], collapse = "; ")) %>%
+  ungroup()  %>% 
+  mutate(n_matches=ifelse(grepl("^$", match), 0, n_matches))
+  
+  
+  coords_clean <- purrr::map_dfr(names(coords), function(x){
+    locs <- as.data.frame(coords[[x]])
+    n <- nrow(locs)
+    reps <- max(1,n)
+    if(n < 1){
+      df <- data.frame(aa_name=rep(x, reps)) %>% 
+        mutate(start=NA_integer_, end=NA_integer_)
+    }else{
+      df <- data.frame(aa_name=rep(x, reps)) %>% 
+       bind_cols(locs)
+    }
+  }) %>% 
+    mutate(position=ifelse(!is.na(start), paste(start,end,sep="-"), "")) %>%
+    group_by(aa_name) %>% 
+    mutate(position = paste(position, collapse = "; ")) %>%
+    ungroup() %>% 
+    select(aa_name, position) %>% 
+    distinct()
+  
+  results <- matches_clean %>% 
+    left_join(coords_clean, by="aa_name")
+
+  return(results)
+}
+```
 
 # Sample Manifest and Expression Data
 
@@ -547,46 +608,82 @@ cb_eset <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samp
 # cb_eset
 ```
 
-# Search for Non-canonical PEXEL 
-
 ```{r}
-pexel_motifs <- data.frame(type=c("Canonical", rep("non-canonical",5)),
-                           motif=c("R.L.E/D/Q","R.I.E/D/Q","K.L.E/D/Q",
-                                   "H.L.E/D/Q","H.I.E/D/Q","A.L.E/D/Q"))
+counts <- read.csv("raw_counts/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_raw_counts.csv")
 
-pexel_motifs
-# write.csv(pexel_motifs, "pexel_motifs.csv", row.names = FALSE)
+dim(counts)
+# head(counts)
 ```
 
 ```{r}
-nc_pexel_motifs <- tabulizer::extract_tables("references/PEXEL/mmi13024_supplemental_table2.pdf")
+TPM <- read.csv("expression_data/kappe_s_PfHsMmu_PF3D7_TPM.csv")
 
-head(pexel_motifs)
-class(pexel_motifs)
+head(TPM)
+```
 
-pexel_motifs[[2]] %>% head()
-pexel_motifs[[1]] %>% as.data.frame()
+# Genome References 
+
+```{r}
+PF3D7 <- AnnotationDbi::loadDb("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7.sqlite")
+# PF3D7
 ```
 
 ```{r}
-nc_pexel_motifs_clean <- purrr::map(pexel_motifs, function(x){
-  df <- as.data.frame(x) 
-  df %>%
-    rename_all(~c("gene_id","description","motif")) %>%
-    mutate(type="non-canonical")
-}) %>% 
-  bind_rows()
+genome <- Biostrings::readDNAStringSet("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_Genome.fasta")
+names(genome) <- str_split_fixed(names(genome), pattern = " \\|", n=3)[,1]
 ```
 
 ```{r}
-nc_pexel_motifs_clean %>% 
-  filter(gene_id != "") %>% 
-  pull(gene_id) %>% 
-  unique() %>%
-  length() #388 
+CDS <- cdsBy(PF3D7,by = "tx", use.names=TRUE)
+
+minus_strand <- sapply(CDS, function(gr) (strand(gr) == "-")@values)
+length(CDS)
 ```
+
+```{r}
+proteins_aa <- Biostrings::readAAStringSet("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_AnnotatedProteins.fasta")
+
+head(proteins_aa)
+length(proteins_aa) #5389
+```
+
+```{r}
+cds_fasta <- Biostrings::readDNAStringSet("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_AnnotatedCDSs.fasta")
+
+head(cds_fasta)
+length(cds_fasta) #5389
+```
+
+```{r}
+test_cds_gr <- CDS[minus_strand][["PF3D7_0100200.1"]]
+cds_seq <- BSgenome::getSeq(genome, test_cds_gr)
+
+# negative strand does not appear to affect the translation of the aa sequence
+t1 <- xscat(translate(cds_seq[1]), translate(cds_seq[2])) %>% 
+  narrow(.,end = 331) %>% 
+  unname()
+
+t2 <- proteins_aa[grep("PF3D7_0100200.1", names(proteins_aa))] %>% 
+  unname()
+
+t3 <- Biostrings::translate(cds_fasta[grep("PF3D7_0100200.1", names(cds_fasta))]) %>% 
+    narrow(.,end = 331) %>% 
+    unname()
+
+identical(class(t1),class(t2)) # TRUE
+identical(as.character(t1),as.character(t2)) # TRUE
+identical(as.character(t1), as.character(t3))
+```
+
 
 # Reference Data
+
+```{r}
+conflicted::conflict_prefer("filter","dplyr")
+conflicted::conflict_prefer("select","dplyr")
+conflicted::conflict_prefer("arrange","dplyr")
+conflicted::conflict_prefer("mutate","dplyr")
+```
 
 ```{r}
 apicoplast_genes <- read.delim("expression_data/gene_annots/PF3D7_Apicoplast_GenesBySubcellularLocalization_Summary.txt", sep="\t") %>% 
@@ -596,13 +693,7 @@ head(apicoplast_genes)
 dim(apicoplast_genes) #506
 ```
 
-WARNING: An illegal reflective access operation has occurred
-WARNING: Illegal reflective access by RJavaTools to method java.util.ArrayList$Itr.hasNext()
-WARNING: Please consider reporting this to the maintainers of RJavaTools
-WARNING: Use --illegal-access=warn to enable warnings of further illegal reflective access operations
-WARNING: All illegal access operations will be denied in a future release
-
-```{r}
+```{r warning=FALSE, eval=FALSE}
 apicoTP <- tabulizer::extract_tables("references/PEXEL/pone.0036598.s009.pdf") %>% 
   lapply(., as.data.frame) %>% 
   bind_rows() %>% 
@@ -616,7 +707,7 @@ apicoTP <- tabulizer::extract_tables("references/PEXEL/pone.0036598.s009.pdf") %
   mutate(type=gsub("[12]$","", type)) %>% 
   pivot_wider(names_from = type,
               values_from = value) %>% 
-  unnest()
+  unnest(cols=c("gene_id"))
 
 dim(apicoTP)
 # write.csv(apicoTP, "apicoTP_old_ids.csv", row.names = FALSE)
@@ -628,27 +719,10 @@ apicoTP_update <- read.csv("expression_data/gene_annots/apicoTP_GeneByLocusTag_S
   select(-source_id) %>% 
   distinct()
 
-head(apicoTP_update)
+# head(apicoTP_update)
 dim(apicoTP_update) #535   8
 # table(duplicated(apicoTP_update$gene_id))
-
-unique(c(apicoplast_genes$gene_id, apicoTP_update$gene_id)) %>% length() #757
-```
-
-
-Pexel genes: 
- R at position 1, any charge-neutral amino acid at position 2, L at position 3, any charge-neutral amino acid at position 4, and E, D, or Q at position 5 (R.L.E/D/Q),
- 
-PlasmoDB search: 
- Pattern	RXLX[EQD]
-Organism	Plasmodium falciparum 3D7
-
-```{r}
-pexel_genes <- read.delim("expression_data/gene_annots/PEXEL_canonical_motif_TranscriptRecordClass_Summary.txt") %>% 
-  janitor::clean_names()
-
-head(pexel_genes)
-dim(pexel_genes) #1,437   11
+# unique(c(apicoplast_genes$gene_id, apicoTP_update$gene_id)) %>% length() #757
 ```
 
 ```{r}
@@ -657,41 +731,367 @@ mito_genes <- rowData(cb_se) %>%
   filter(seqnames == "Pf3D7_MIT_v3" | grepl("mitochondrial", description, ignore.case = TRUE))
 
 dim(mito_genes)
-length(unique(mito_genes$gene_name))
+```
 
-table(rowData(cb_se)$seqnames) 
+# VAR Genes Expression
+
+```{r}
+sheet_names <- paste0("PfCVG_",c("var","rifin","stevor","Pfmc-2TM","PfACS","CLAG"))
+```
+
+```{r}
+conflicted::conflict_prefer("select","dplyr")
+cvgs <- purrr::map_dfr(sheet_names, function(sheet){
+  openxlsx::readWorkbook("references/CVGs.xlsx",sheet) %>% 
+    mutate(type=sheet) %>% 
+    select(type, everything())
+}) %>% 
+  janitor::clean_names()
+
+head(cvgs)
+dim(cvgs) #316
+table(cvgs$type)
+```
+
+```{r}
+cvg_expn <- log2(assay(cb_se,"cpm")+1)
+include <- intersect(cvgs$gene_id, rownames(cvg_expn))
+cvg_expn <- cvg_expn[include,]
+
+head(cvg_expn[,1:5])
+dim(cvg_expn) #139  17
+# any(duplicated(rownames(cvg_expn)))
+range(cvg_expn)
+```
+
+```{r}
+# cvgs %>% 
+#   group_by(type) %>% 
+#   dplyr::count() %>% 
+#   write.csv(.,"cvgs_pexel_domains/cvgs_counts_table.csv", row.names = F)
+
+cvgs %>%
+  filter(gene_id %in% rownames(cvg_expn)) %>%
+  group_by(type) %>%
+  dplyr::count() 
+#   write.csv(., "cvgs_pexel_domains/cvgs_counts_table_filtered_by_expression.csv", row.names = F)
+```
+
+```{r}
+missing <- setdiff(cvgs$gene_id, rownames(cvg_expn))
+# length(missing)
+
+missing_raw_counts <- counts %>% 
+  filter(gene_name %in% missing) %>% 
+  pivot_longer(cols = -gene_name,
+               names_to = "sample_id_cat",
+               values_to = "counts") %>% 
+  inner_join(., pf_samples, by="sample_id_cat") %>% 
+  group_by(time_point) %>% 
+  summarise(mean=mean(counts),
+            median=median(counts), 
+            sd=sd(counts))
+
+# write.csv(missing_raw_counts,"cvgs_pexel_domains/missing_raw_counts_summary.csv", row.names = FALSE)
+```
+
+```{r}
+cvg_expn_long <- cvg_expn %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols = -gene_id,
+               names_to = "sample_id_cat",
+               values_to = "log2CPM") %>% 
+  inner_join(., pf_samples, by="sample_id_cat") %>%
+  left_join(., cvgs, by=c("gene_id")) %>%
+  select(gene_id:log2CPM, type, product, everything())
+
+cvg_expn_long
+# table(cvg_expn_long$type)
+```
+
+```{r eval=FALSE}
+# Day 6 boxplots
+purrr::map(sheet_names, function(cvg_type){
+  input <- cvg_expn_long %>% 
+    filter(time_point == "Day6") %>% 
+    filter(type==cvg_type) %>% 
+    group_by(gene_id) %>% 
+    mutate(mean_expn=mean(log2CPM)) %>% 
+    ungroup() %>% 
+    arrange(desc(mean_expn)) %>% 
+    mutate(gene_id=factor(gene_id, levels = unique(gene_id))) %>% 
+    select(gene_id:log2CPM, mean_expn, everything())
+  
+  n <- length(unique(input$gene_id))
+  fig_width <- ifelse(n<=11, 4, 15)
+  
+  # svglite(paste0("figures/combat_seq/cvgs_pexel/cvg_", cvg_type,"_expression_boxplot.svg"),
+  #         fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = fig_width)
+  print(ggplot(input, 
+         aes(x=gene_id, y=log2CPM, fill=analysis_factor_group)) +
+    geom_boxplot(color="grey50", alpha=0.2) +
+    geom_point(aes(color=analysis_factor_group), 
+               position = position_jitter(width = 0.3),
+               size=2) +
+    scale_fill_manual(values=ggpubr::get_palette("npg",4)[4]) +
+    scale_color_manual(values=ggpubr::get_palette("npg",4)[4]) +
+    facet_wrap(~type, scale="free_x") +
+    labs(x="") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle=25, vjust=1,hjust=1),
+          plot.margin = margin(l=6,unit="mm"),
+          legend.position = "top"))
+  # dev.off()
+})
+```
+
+
+```{r fig.height=10, fig.width=10}
+colanno <- pf_samples %>% 
+  select(time_point=analysis_factor_group) %>% 
+  HeatmapAnnotation(df = ., which = "column",
+                    col = list(time_point=ggpubr::get_palette("jco",5) %>%
+                                          set_names(unique(pf_samples$analysis_factor_group))))
+# colanno
+
+rowanno <- cvgs %>% 
+  filter(gene_id %in% rownames(cvg_expn)) %>% 
+  select(-product, CVG_type=type) %>% 
+  column_to_rownames("gene_id") 
+
+gap_index <- rowanno %>% 
+  group_by(CVG_type) %>%
+  mutate(n=n()) %>% 
+  ungroup() %>% 
+  arrange(n) %>% 
+  mutate(CVG_type=factor(CVG_type, levels=unique(CVG_type))) %>% 
+  select(-n)
+  # mutate(nrow=1:nrow(.)) %>% 
+  # group_by(CVG_type) %>%
+  # summarise(index=max(nrow)) %>% 
+  # pull(index, name = CVG_type)
+
+
+rowanno <- rowanno %>%
+  mutate(CVG_type=factor(CVG_type, levels=unique(gap_index$CVG_type))) %>%
+  arrange(CVG_type)
+gene_order <- rownames(rowanno)
+rowanno <- rowanno %>% 
+  HeatmapAnnotation(df = . , which = "row",
+                    col = list(CVG_type=ggpubr::get_palette(palette = "npg", 6) %>%
+                                        set_names(unique(rowanno$CVG_type))))
+
+heat_colors <- colorRampPalette(viridis::turbo(10))(299)
+
+# pdf("figures/combat_seq/cvgs_pexel/CGVs_timepoints_log2CPM_heatmap.pdf", height = 12, width = 10)
+Heatmap(matrix = cvg_expn[gene_order, ], 
+        col = heat_colors,
+        name = "log2 CPM",
+        split = gap_index,
+        top_annotation = colanno, 
+        left_annotation = rowanno, 
+        show_column_names = FALSE,
+        row_title_gp = gpar(fontsize = 6),
+        # row_title_rot = 270,
+        row_names_gp = gpar(fontsize = 6))
+# dev.off()
+```
+
+# Search for PEXEL 
+
+From PlasmoDB
+Pexel genes: 
+ R at position 1, any charge-neutral amino acid at position 2, L at position 3, any charge-neutral amino acid at position 4, and E, D, or Q at position 5 (R.L.E/D/Q),
+ 
+PlasmoDB search: 
+ Pattern	RXLX[EQD]
+Organism	Plasmodium falciparum 3D7
+
+```{r}
+#For comparison from PlasmoDB
+pexel_genes <- read.delim("expression_data/gene_annots/PEXEL_canonical_motif_TranscriptRecordClass_Summary.txt") %>% 
+  janitor::clean_names()
+
+head(pexel_genes)
+dim(pexel_genes) #1,437   11
+```
+
+```{r}
+# For comparison 
+nc_pexel_motifs <- tabulizer::extract_tables("references/PEXEL/mmi13024_supplemental_table2.pdf")
+
+
+nc_pexel_motifs_clean <- purrr::map(nc_pexel_motifs, function(x){
+  df <- as.data.frame(x) 
+  df %>%
+    rename_all(~c("gene_id","description","motif")) %>%
+    mutate(type="non-canonical")
+}) %>% 
+  bind_rows()
+
+nc_pexel_motifs_clean %>% 
+  filter(gene_id != "") %>% 
+  pull(gene_id) %>% 
+  unique() %>%
+  length() #388 
+```
+
+```{r}
+pexel_motifs <- data.frame(type=c("Canonical", rep("non-canonical",5)),
+                           motif=c("R.L.E/D/Q","R.I.E/D/Q","K.L.E/D/Q",
+                                   "H.L.E/D/Q","H.I.E/D/Q","A.L.E/D/Q"),
+                           motif_regex=c("R.L.[EDQ]","R.I.[EDQ]","K.L.[EDQ]",
+                                   "H.L.[EDQ]","H.I.[EDQ]","A.L.[EDQ]")) %>% 
+  mutate(motif_name=paste0(tolower(type),"_",motif) %>% 
+           gsub("[-\\.\\/]","", .))
+
+pexel_motifs
+# write.csv(pexel_motifs, "cvgs_pexel_domains/pexel_motifs.csv", row.names = FALSE)
+```
+
+```{r}
+aa_lengths <- width(proteins_aa) 
+ok_len <- aa_lengths >= 150
+
+nterm_150aa <- proteins_aa[ok_len] %>% 
+  narrow(., start = 1, width = 150) 
+
+short_aa <- proteins_aa[!ok_len] %>% 
+  narrow(., start = 1, width = aa_lengths[!ok_len]) 
+
+nterm_150aa <- c(nterm_150aa, short_aa)
+
+
+trimmed_aa_lens <- width(nterm_150aa)
+ok_100_len <- trimmed_aa_lens >= 100
+
+nterm_100aa <- nterm_150aa[ok_100_len] %>% 
+  narrow(., start = 1, width = 100)
+
+short_100aa <- nterm_150aa[!ok_100_len] %>% 
+  narrow(., start = 1, width = trimmed_aa_lens[!ok_100_len]) 
+
+nterm_100aa <- c(nterm_100aa, short_100aa)
+
+# head(nterm_150aa)
+# head(nterm_100aa)
+# 
+# tail(nterm_150aa)
+# tail(nterm_100aa)
+# Biostrings::writeXStringSet(nterm_100aa, filepath = "cvgs_pexel_domains/PF3D7_100aa_nterm_protein.fasta")
+```
+
+```{r eval=FALSE}
+pexel_motif_patterns <- pull(pexel_motifs, motif_regex, name = motif_name)
+
+pexel_hits <- purrr::map(.x = pexel_motif_patterns, 
+                         .f = aa_motif_search, 
+                         aa_to_search = nterm_150aa)
+
+lapply(pexel_hits, head)
+lapply(pexel_hits, dim)
+# saveRDS(pexel_hits,"cvgs_pexel_domains/pexel_motif_search_150aa_results_list.RDS")
+```
+
+```{r}
+pexel_hits_all <- read.csv("cvgs_pexel_domains/pexel_motif_search_150aa_results.csv", row.names = 1)
+
+# new_col_names <- lapply(pexel_motifs$motif_name, function(x) paste(c("n_matches","match","position"), x, sep="_")) %>% unlist()
+# pexel_hits_all <- purrr::reduce(pexel_hits, left_join, by="aa_name") %>%
+#   rename_at(vars(matches("match|position")), ~new_col_names)
+# 
+head(pexel_hits_all)
+# dim(pexel_hits_all) #5389   19
+# 
+# pexel_hits_all[,grep("n_matches", colnames(pexel_hits_all))] %>% 
+#   sapply(., table)
+# write.csv(pexel_hits_all, "cvgs_pexel_domains/pexel_motif_search_150aa_results.csv")
+```
+
+# Integrate TM, Api, Pexel Annotations 
+
+```{r}
+pexel_hits_bool <- pexel_hits_all %>% 
+  select(aa_name, matches("n_matches")) %>%
+  mutate(transcript_id=gsub("\\.p[0-9]","", aa_name),
+         gene_id=gsub("\\.[0-9]+","",transcript_id)) %>% 
+  select(gene_id,
+         matches("n_matches")) %>%
+  group_by(gene_id) %>% 
+  mutate(across(matches("n_matches"), .fns = sum)) %>% 
+  ungroup() %>% 
+  distinct() %>% 
+  pivot_longer(cols=matches("n_matches"),
+               names_to = "type",
+               values_to = "n_matches") %>%
+  mutate(type=gsub("n_matches_","",type) %>%
+           gsub("ical", "",.),
+         has_pexel_domain=n_matches>0) %>% 
+  group_by(gene_id) %>%
+  mutate(any_pexel_domain=any(has_pexel_domain)) %>% 
+  ungroup() %>% 
+  pivot_wider(id_cols = c(gene_id,any_pexel_domain),
+              names_from = type,
+              values_from = has_pexel_domain,
+              names_glue = "{.value}_{type}")
+
+# pexel_hits_bool #5,318
+# table(duplicated(pexel_hits_bool$gene_id)) # FALSE
+# table(pexel_hits_bool$any_pexel_domain) #2346
+# table(pexel_hits_bool$has_pexel_domain_canon_RLEDQ) #669 genes
 ```
 
 ```{r}
 apicoplast_ids <- unique(c(apicoplast_genes$gene_id, apicoTP_update$gene_id))
 
-TM_domains <- read.delim("expression_data/gene_annots/P33D7_transmembrane_signal_peptides_Summary.txt", sep = "\t") %>% 
-  janitor::clean_names() %>% 
+Pf_domain_annots <- read.delim("expression_data/gene_annots/P33D7_transmembrane_signal_peptides_Summary.txt", sep = "\t") %>% 
+  janitor::clean_names()  %>% 
   filter(!gene_id %in% mito_genes$gene_id) %>% 
-  mutate_at(vars(signal_p_peptide,x_tm_domains), ~gsub("N/A",NA, .)) %>% 
-  mutate(has_signal_peptide=!is.na(signal_p_peptide),
+  mutate_at(vars(signal_p_peptide,x_tm_domains), ~gsub("N/A",NA, .)) %>%
+  
+  group_by(gene_id) %>% 
+  mutate(has_signal_peptide=any(!is.na(signal_p_peptide)),
          has_tm_domain=case_when(
-           x_tm_domains > 0 ~ TRUE,
+           any(x_tm_domains > 0) ~ TRUE,
            TRUE ~ FALSE
          ),
-         apicoplast_protein=gene_id %in% apicoplast_ids,
-         pexel_protein=gene_id %in% pexel_genes$gene_id) %>% 
+         apicoplast_protein=gene_id %in% apicoplast_ids) %>% 
+  ungroup() %>% 
+  #de-duplicate gene_ids 
+  select(-source_id, -signal_p_peptide, 
+         -x_tm_domains,-matches("p_fam"), 
+         -product_description) %>% 
   distinct() %>% 
-  select(gene_id,source_id,
+  
+  left_join(., pexel_hits_bool, by="gene_id") %>%
+  select(gene_id,
+         any_pexel_domain,
          matches("peptide|tm.domain"),
          apicoplast_protein,
+         matches("has_pexel_domain"),
          everything())
 
-head(TM_domains)
-dim(TM_domains) #5720   14
+head(Pf_domain_annots)
+dim(Pf_domain_annots)  # 5598    8
+# any(duplicated(Pf_domain_annots$gene_id)) #FALSE
+# write.csv(Pf_domain_annots, "cvgs_pexel_domains/pexel_tm_apicoplast_gene_annots.csv", row.names = F)
 ```
 
 ```{r}
-table(TM_domains$has_signal_peptide)
-table(TM_domains$has_tm_domain)
-table(TM_domains$apicoplast_protein)
-# table(duplicated(TM_domains$gene_id))
-table(TM_domains$pexel_protein)
+table(Pf_domain_annots$has_signal_peptide)
+table(Pf_domain_annots$has_tm_domain)
+table(Pf_domain_annots$apicoplast_protein)
+table(Pf_domain_annots$any_pexel_domain)
+```
+
+```{r}
+Pf_domain_annots[,grep("pexel", colnames(Pf_domain_annots))] %>% 
+  sapply(., function(x) sum(x, na.rm = T)) %>% 
+  as.data.frame() 
+
+# Pf_domain_annots[,grep("pexel", colnames(Pf_domain_annots))] %>% 
+#   sapply(., function(x) sum(is.na(x))) 
 ```
 
 
@@ -704,15 +1104,16 @@ library(ggVennDiagram)
 ```{r}
 cols <- c("has_signal_peptide","has_tm_domain","apicoplast_protein")
 gene_lists <- lapply(cols, function(col){
-  idx <- TM_domains[[col]]
-  TM_domains$gene_id[idx]
+  idx <- Pf_domain_annots[[col]]
+  Pf_domain_annots$gene_id[idx]
 })
 names(gene_lists) <- cols
 
 # gene_lists
+sapply(gene_lists, length)
 ```
 
-```{r fig.height=7, fig.width=7}
+```{r fig.height=7, fig.width=7, eval=FALSE}
 # svglite::svglite("figures/tm_signal_apicoplast_venn.svg", height = 10, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 ggVennDiagram(gene_lists,
               label_alpha=0.2,
@@ -726,5 +1127,391 @@ ggVennDiagram(gene_lists,
 # dev.off()
 ```
 
+
+# Pexel Genes Ranking 
+
+```{r}
+library(UpSetR)
+```
+
+Keep genes that have TM or signal peptides, but are NOT apicoplast genes
+
+```{r}
+input_venn <- Venn(gene_lists)
+input_dat <- process_data(input_venn)
+```
+
+```{r}
+input_dat@region[["count"]] %>% sum()
+length(unique(unlist(gene_lists)))
+```
+
+```{r}
+of_interest <- input_dat@region %>% 
+  as_tibble() %>% 
+  select(gene_id=item,count, name) %>% 
+  filter(grepl("^has_signal_peptide$|^has_tm_domain$|^has_signal_peptide..has_tm_domain$",name)) %>% 
+  unnest(cols=gene_id)  %>% 
+  left_join(.,Pf_domain_annots, by="gene_id") %>%
+  select(gene_id, matches("pexel"),
+         everything(),
+         -count, -name)
+
+of_interest %>% dim()
+
+table(of_interest$any_pexel_domain)
+table(of_interest$apicoplast_protein)
+# write.csv(of_interest,"cvgs_pexel_domains/pexel_tm_signal_peptide_genes_of_interest.csv", row.names = F)
+```
+
+```{r}
+cpm <- assay(cb_se,"cpm") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols = -gene_id, 
+               names_to = "sample_id_cat",
+               values_to = "CPM")
+
+head(cpm)
+# pdf("figures/combat_seq/cvgs_pexel/all_genes_expression_CPM_histogram.pdf", height = 5, width = 7)
+hist <- ggplot(cpm, aes(x=log2(CPM+1))) +
+  geom_histogram(binwidth  = 0.5) +
+  scale_x_continuous(breaks = seq(0,20, by=2)) +
+  geom_vline(xintercept = log2(10)) +
+  geom_vline(xintercept = log2(5)) +
+  theme_classic()
+# hist
+# dev.off()
+
+```
+
+
+```{r}
+threshold <- 10
+col_name <-glue::glue("samples_expressing_at_GE.{threshold}CPM")
+
+pexel_tm_api_expn <- cpm %>% 
+  filter(gene_id %in% of_interest$gene_id) %>%
+  left_join(., pf_samples, by="sample_id_cat") %>% 
+  group_by(analysis_factor_group,
+           time_point,infection_status, gene_id) %>% 
+  # mutate(!! col_name :=sum(CPM >= threshold)) %>% 
+  select(gene_id:CPM,analysis_factor_group, 
+         matches("samples_expressing"),
+         everything()) %>% 
+  summarise(!! col_name :=sum(CPM >= threshold),
+            mean_CPM=mean(CPM),
+            median_CPM=median(CPM),
+            sd_CPM=sd(CPM),
+            .groups = 'keep') %>% 
+  ungroup() 
+
+# pexel_tm_api_expn
+length(unique(pexel_tm_api_expn$gene_id)) # 1,112
+```
+
+```{r}
+pexel_annots <- of_interest %>%
+  # ensure gene has expression 
+  filter(gene_id %in% unique(pexel_tm_api_expn$gene_id)) %>% 
+  select(gene_id, c(has_pexel_domain_canon_RLEDQ:has_tm_domain)) %>% 
+  pivot_longer(cols=c(has_pexel_domain_canon_RLEDQ:has_tm_domain),
+               values_to = "value",
+               names_to = "stat") %>% 
+  mutate(type=gsub("^.+_([cn][a-z]+)_[A-Z]+", "\\1", stat)) %>% 
+  group_by(gene_id, type) %>% 
+  # convert the number of non-canonical motifs to percent out of 5 total non-canonical motifs possible. 
+  mutate(total=n(),
+         value=value/n()) %>% 
+  ungroup() %>% 
+  select(gene_id:value)
+
+# pexel_annots
+pexel_tm_api_rank_data <- pexel_tm_api_expn %>% 
+  filter(!grepl("Day0", time_point)) %>% # dont want SPZ expression to be part of the rank calc
+  pivot_longer(cols=samples_expressing_at_GE.10CPM,
+               values_to = "value",
+               names_to = "stat") %>%
+  mutate_at(vars(stat), ~ifelse(grepl("samples_expressing", .), paste0(time_point,"_", .), .)) %>%
+  select(gene_id, stat, value) %>%
+  distinct() %>%
+  arrange(gene_id) %>% 
+  group_by(gene_id) %>% 
+  # convert to percent of expressors to be out of 12 total samples for all time points
+  mutate(value=round(value/12,digits = 2)) %>%
+  ungroup() %>%
+  bind_rows(pexel_annots) %>%
+  group_by(gene_id) %>%
+  mutate(rank=sum(value)) %>%
+  ungroup() %>%
+  mutate(rank_scaled=round(scales::rescale(rank, to = c(1,10)), digits=2)) %>%
+  arrange(desc(rank))
+
+pexel_tm_api_ranks <- pexel_tm_api_rank_data %>% 
+  select(gene_id, rank_scaled) %>% 
+  distinct() %>% 
+  as.data.frame() %>% 
+  set_rownames(.$gene_id)
+
+# pexel_tm_api_ranks
+# range(pexel_tm_api_rank_data$rank_scaled)
+# length(unique(pexel_tm_api_ranks$gene_id))
+quantile(pexel_tm_api_ranks$rank_scaled, probs=seq(0,1,length.out=11))
+```
+
+
+
+```{r fig.height=10, fig.width=11}
+top_hits <- pexel_tm_api_rank_data %>% 
+  filter(rank_scaled >= 6.17) %>% 
+  select(gene_id,value,stat)  %>% 
+  mutate_at(vars(stat), ~gsub("samples_expressing_at_","expn_", .)) %>% 
+  pivot_wider(id_cols=stat, 
+              names_from = gene_id,
+              values_from = value) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("stat") %>% 
+  as.matrix()
+  
+
+# top_hits
+# pheatmap::pheatmap(top_hits,
+#                    annotation_col = select(pexel_tm_api_ranks, rank_scaled))
+
+col_fun = circlize::colorRamp2(seq(6,10, length.out=5),
+                               RColorBrewer::brewer.pal(5,name = "Reds"))
+
+input <- pexel_tm_api_ranks %>%
+  filter(gene_id %in% colnames(top_hits)) %>%
+  select(rank_scaled)
+HA <- HeatmapAnnotation(df = input,
+                        col =  list(rank_scaled = col_fun),
+                        simple_anno_size = unit(4,"cm"))
+# pdf("figures/combat_seq/cvgs_pexel/pexel_TM_signal_peptide_genes_ranked_heatmap.pdf", height = 10, width = 20)
+ComplexHeatmap::Heatmap(matrix = top_hits,
+                        col = colorRampPalette(RColorBrewer::brewer.pal(9,"Blues"))(50),
+                        top_annotation = HA)
+# dev.off()
+```
+
+
+```{r}
+of_interest_rank_expn_stats <- pexel_tm_api_expn %>% 
+  pivot_wider(id_cols = gene_id, 
+              names_from = time_point, 
+              values_from = c(samples_expressing_at_GE.10CPM:sd_CPM), 
+              names_glue = "{time_point}_{.value}") %>% 
+  select(colnames(.)[order(colnames(.))]) %>% 
+  left_join(., pexel_tm_api_ranks, by="gene_id") %>%
+  left_join(., of_interest, by="gene_id") %>%
+  arrange(desc(rank_scaled)) %>% 
+  select(gene_id, rank_scaled, 
+         any_pexel_domain,has_pexel_domain_canon_RLEDQ, 
+         has_signal_peptide,
+         matches("Day[2456]"),
+         matches("Day0"),
+         everything())
+
+
+of_interest_rank_expn_stats %>% dim()
+# write.csv(of_interest_rank_expn_stats, "cvgs_pexel_domains/pexel_tm_signal_peptide_genes_of_interest_ranked.csv", row.names = FALSE)
+```
+
+
+```{r}
+input <- of_interest %>% 
+  filter(any_pexel_domain) %>% 
+  select(gene_id, matches("has_pexel")) %>% 
+  mutate_at(vars(matches("has_pexel")), ~as.numeric(.)) %>% 
+  as.data.frame()
+
+# pdf("figures/combat_seq/cvgs_pexel/pexel_TM_signal_peptide_genes_upset.pdf", height = 5, width = 8)
+UpSetR::upset(data=input, 
+              nintersects = NA,
+              order.by=c("freq","degree"), 
+              group.by = "degree")
+# dev.off()
+```
+
+```{r}
+signal_peps_upset <- of_interest %>% 
+  filter(has_signal_peptide) %>% 
+  select(gene_id, matches("has_pexel")) %>% 
+  mutate_at(vars(matches("has_pexel")), ~as.numeric(.)) %>% 
+  as.data.frame()
+
+dim(signal_peps_upset)
+
+# pdf("figures/combat_seq/cvgs_pexel/pexel_and_signal_peptide_ONLY_genes_upset.pdf", height = 5, width = 8)
+UpSetR::upset(data=signal_peps_upset, 
+              nintersects = NA)
+# dev.off()
+```
+
+```{r fig.height=7, fig.width=7}
+cols <- grep("has_pexel",colnames(of_interest), value=TRUE)
+gene_lists_sub <- lapply(cols, function(col){
+  idx <- of_interest[[col]]
+  of_interest$gene_id[idx]
+})
+names(gene_lists_sub) <- cols
+# sapply(gene_lists_sub, length)
+
+# svglite::svglite("figures/pexel_tm_apicoplast_venn.svg", height = 10, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+ggVennDiagram(gene_lists_sub,
+              label_alpha=0.2,
+              label_geom = "label",
+              set_size=6, 
+              label_size=6) 
+# dev.off()
+```
+
+
 # Expression Plots 
+
+### PTEX Complex
+
+-	EXP2 (PF3D7_1471100)
+-	PTEX 150 (PF3D7_1436300)
+-	HSP101 (PF3D7_1116800)
+-	TRX2 (PF3D7_1345100)
+-	PTEX 88 (PF3D7_1105600)
+
+```{r}
+ptex_ids <- c("PF3D7_1471100","PF3D7_1436300","PF3D7_1116800","PF3D7_1345100","PF3D7_1105600")
+```
+
+```{r}
+ptex_expn <- log2(assay(cb_se,"cpm")+1)
+include <- intersect(ptex_ids, rownames(ptex_expn))
+ptex_expn <- ptex_expn[include,pf_samples$sample_id_cat]
+head(ptex_expn[,1:5])
+dim(ptex_expn) #211 of 278 had expression 
+```
+
+```{r}
+ptex_expn_long <- ptex_expn %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols = -gene_id,
+               names_to = "sample_id_cat",
+               values_to = "log2CPM") %>% 
+  inner_join(., pf_samples, by="sample_id_cat") %>%
+  select(gene_id:log2CPM, everything())
+
+head(ptex_expn_long)
+```
+
+```{r fig.width=10}
+labels <- c("PF3D7_1471100"="EXP2","PF3D7_1436300"="PTEX150", "PF3D7_1116800"="HSP101", "PF3D7_1345100"="TRX2", "PF3D7_1105600"="PTEX88")
+
+# svg("figures/combat_seq/cvgs_pexel/PTEX_complex_genes_expression_boxplot.svg", height = 5, width = 10)
+ggplot(ptex_expn_long, aes(x=gene_id, y=log2CPM, fill=analysis_factor_group)) +
+  geom_boxplot(alpha=0.2, color="grey60") +
+  geom_point(aes(color=analysis_factor_group),
+             position = position_jitterdodge(jitter.width = 0.1),
+             size=2, alpha=0.75) +
+  scale_x_discrete(labels=labels) +
+  scale_color_viridis_d(end=0.925,direction = -1) +
+  scale_fill_viridis_d(end=0.925,direction = -1) +
+  labs(x="") +
+  theme_classic()
+# dev.off()
+```
+
+
+### Top Hits 
+
+```{r}
+pexel_expn <- log2(assay(cb_se,"cpm")+1)
+pexel_expn <- pexel_expn[pexel_tm_api_ranks$gene_id,]
+```
+
+```{r}
+highest_rank <- pexel_tm_api_ranks %>% 
+  filter(rank_scaled > 6.17)
+
+include <- intersect(highest_rank$gene_id, rownames(pexel_expn))
+top_hits_expn <- pexel_expn[include,pf_samples$sample_id_cat]
+colnames(top_hits_expn) <- pf_samples$analysis_group_id
+
+head(top_hits_expn[,1:5])
+dim(top_hits_expn) 
+```
+
+
+```{r fig.height=10, fig.width=10}
+ann_colors <- list(analysis_factor_group=ggpubr::get_palette("jco",5) %>% 
+                     set_names(., unique(pf_samples$analysis_factor_group)))
+
+sample_groups <- select(pf_samples, analysis_factor_group) 
+rownames(sample_groups) <- pf_samples$analysis_group_id
+
+# range(scale(t(top_hits_expn)))
+# pdf("figures/combat_seq/cvgs_pexel/pexel_top_ranked_genes.pdf", height = 15, width = 10)
+pheatmap::pheatmap(top_hits_expn,
+                   annotation_col = sample_groups,
+                   annotation_colors = ann_colors,
+                   fontsize = 5,
+                   scale = "row")
+# dev.off()
+```
+
+
+
+### Signal Peps
+
+```{r}
+signal_peps <- of_interest %>% 
+  filter(has_signal_peptide) 
+
+dim(signal_peps)
+# signal_peps
+```
+
+```{r}
+include <- intersect(signal_peps$gene_id, rownames(pexel_expn))
+signal_peps_expn <- pexel_expn[include,pf_samples$sample_id_cat]
+colnames(signal_peps_expn) <- pf_samples$analysis_group_id
+
+head(signal_peps_expn[,1:5])
+dim(signal_peps_expn) #211 of 278 had expression 
+```
+
+```{r}
+ann_colors <- list(analysis_factor_group=ggpubr::get_palette("jco",5) %>% 
+                     set_names(., unique(pf_samples$analysis_factor_group)))
+```
+
+```{r fig.height=10, fig.width=10}
+sample_groups <- select(pf_samples, analysis_factor_group) 
+rownames(sample_groups) <- pf_samples$analysis_group_id
+
+# pdf("figures/combat_seq/cvgs_pexel/pexel_and_signal_peptide_ONLY_heatmap.pdf",
+#     height = 15, width = 10)
+pheatmap::pheatmap(signal_peps_expn,
+                   annotation_col = sample_groups,
+                   annotation_colors = ann_colors,
+                   fontsize = 5,
+                   scale = "row")
+# dev.off()
+```
+
+
+
+# Share the Data 
+
+```{bash}
+destination="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/"
+rsync -av --exclude .DS_Store cvgs_pexel_domains $destination
+rsync -av --exclude .DS_Store figures $destination 
+rsync -av --exclude .DS_Store presentations $destination 
+```
+
+
+# Session Information 
+
+```{r}
+sessionInfo()
+```
 

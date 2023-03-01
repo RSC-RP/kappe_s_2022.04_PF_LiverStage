@@ -8,7 +8,7 @@ output: html_document
 # Set-up 
 
 ```{r set-up}
-knitr::opts_knit$set(root.dir = PROJHOME)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
 knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),
                       tidy=TRUE,
                       fig.align='center',
@@ -500,7 +500,6 @@ rsync -av $data_processing_path/normalized_counts/ ./expression_data/
 ```{bash eval=FALSE}
 data_processing_path="/active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant"
 ln -svf $data_processing_path/species_genomes .
-#ln -svf $data_processing_path/ .
 ```
 
 # Sample Info
@@ -601,7 +600,8 @@ species_genes <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_
   select(gene_name, gene_id, everything()) %>% 
   set_rownames(.$gene_id)
 
-head(species_genes)
+# head(species_genes)
+table(species_genes$genome)
 ```
 
 # Counts and Normalization 
@@ -773,21 +773,6 @@ mapping_stats_comparison <- mapping_stats_long %>%
 head(mapping_stats_comparison)
 # write.csv(mapping_stats_comparison, "expression_data/kappe_s_PfHsMmu_mapping_stats_cated_samples_GRCh38_GRCm39_Pf3D7v58_07.01.2022.csv",
 # row.names = FALSE)
-```
-
-```{r}
-seq_depth <- mapping_stats_comparison %>% 
-  select(sample_id_cat, total_reads, analysis_group) %>% 
-  distinct() %>% 
-  group_by(analysis_group) %>% 
-  summarise(mean_pe_reads=mean(total_reads)) %>% 
-  ungroup() %>% 
-  mutate(mean_pe_reads=formatC(mean_pe_reads, format = "e", digits = 1)) %>% 
-  arrange(analysis_group)
-
-seq_depth
-# table(seq_depth$analysis_group)
-# write.csv(seq_depth, "liver_stage_rnaseq_seqdepth_by_group.csv", row.names = FALSE)
 ```
 
 
@@ -1008,7 +993,6 @@ grouped_plots <- purrr::map(groups, function(grp){
 ## Plasmodium Genes 
 
 ```{r fig.height=7, fig.width=7}
-
 pf_samples_ids <- unique(pf_expression$CPM_anno$sample_id_cat)
 
 pf_density_plots <- purrr::map(pf_samples_ids,
@@ -1065,6 +1049,8 @@ grouped_plots <- purrr::map(groups, function(grp, density_plots=pf_density_plots
 # names(grouped_plots) <- unique(sample_manifest_cated$analysis_group) 
 ```
 
+## Sequencing Depth 
+
 ```{r}
 pf_seqdepth_per_sample <- pf_expression$counts_anno %>% 
   group_by(sample_id_cat,analysis_group) %>% 
@@ -1082,13 +1068,74 @@ pf_seqdepth <- pf_seqdepth_per_sample %>%
 
 pf_seqdepth
 # write.csv(pf_seqdepth,"liver_stage_Pfalciparum_aligned_rnaseq_seqdepth_by_group.csv", row.names = FALSE)
+
+# pf_seqdepth_per_sample %>% 
+#   filter(analysis_group=="sporozorite") %>% 
+#   arrange(desc(total_pf_pe_reads))
 ```
 
 ```{r}
-pf_seqdepth_per_sample %>% 
-  filter(analysis_group=="sporozorite") %>% 
-  arrange(desc(total_pf_pe_reads))
+all_cts <- read.csv("raw_counts/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_raw_counts.csv")
+
+# head(all_cts)
 ```
+
+```{r}
+all_cts_long <- all_cts %>% 
+  select(gene_id=gene_name, everything()) %>% 
+  pivot_longer(cols=-gene_id, 
+               names_to="sample_id_cat", 
+               values_to="counts") %>% 
+  inner_join(., sample_manifest_cated, by="sample_id_cat") %>% 
+  left_join(., species_genes, by="gene_id")
+
+head(all_cts_long)
+```
+
+```{r}
+coverage_by_genome <- all_cts_long %>% 
+  group_by(sample_id_cat) %>% 
+  mutate(total_counts=sum(counts)) %>% 
+  group_by(analysis_group, 
+           sample_id_cat, 
+           genome,
+           total_counts, .add = TRUE) %>% 
+  summarise(total_per_genome=sum(counts), 
+            .groups = 'keep') %>% 
+            # mean=mean(counts), 
+            # median=median(counts), 
+            # sd=sd(counts)) %>% 
+  ungroup() %>% 
+  mutate(percent_of_total=round(total_per_genome/total_counts * 100, digits = 3))
+
+
+# write.csv(coverage_by_genome,"qc_data/sequencing_coverage_by_sample_per_genome.csv", row.names = F)
+
+ave_coverage_by_genome <-  coverage_by_genome  %>% 
+  group_by(analysis_group, genome) %>% 
+  summarise(mean_pct=round(mean(percent_of_total), digits=3))
+
+# write.csv(ave_coverage_by_genome, "qc_data/average_percent_of_reads_aligned_per_genome_by_group.csv", row.names = F)
+
+mean_total_cov <- coverage_by_genome %>% 
+  group_by(analysis_group) %>% 
+  summarise(mean_coverage=mean(total_counts))
+
+
+ave_coverage_by_genome %>% 
+  left_join(., mean_total_cov, by="analysis_group") %>% 
+  filter(grepl("Pf\\+",analysis_group),
+         grepl("GRChm39", genome)) %>% 
+  mutate(mouse_reads=mean_coverage*(mean_pct/100))
+
+
+
+
+```
+Day5
+total = 26,454,622
+
+mouse =19,268,224
 
 ```{r eval=FALSE}
 all_cts <- read.csv("raw_counts/kappe_s_PfHsMmu_GRCh38_GRCm39_Pf3D7v58_raw_counts.csv")
