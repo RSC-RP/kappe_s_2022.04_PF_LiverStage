@@ -1719,6 +1719,22 @@ ortholog_uniprotIDs %>%
 
 ### Motifs with possible Orthologs
 
+```{r eval=FALSE}
+library(JASPAR2022)
+opts <- list(collection="CORE",
+             matrixtype="PWM")
+
+opts2 <- list(collection="CORE",
+              matrixtype="PFM")
+pwm <- TFBSTools::getMatrixSet(JASPAR2022, opts)
+pfm <- TFBSTools::getMatrixSet(JASPAR2022, opts2)
+
+length(pwm) #1956
+length(pfm) #1956
+# saveRDS(pwm, "motif_analysis/JASPAR2022_PWMs.RDS")
+# saveRDS(pfm, "motif_analysis/JASPAR2022_PFMs.RDS")
+```
+
 ```{r}
 opts <- list(collection="CORE",
              matrixtype="PWM")
