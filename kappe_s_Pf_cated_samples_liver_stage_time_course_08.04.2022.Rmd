@@ -225,9 +225,7 @@ dge_dendrograms <- function(expnData, pheno, method,
 
   return(list)
 }
-
 ```
-
 
 ```{r}
 #Pheatmap
@@ -633,6 +631,152 @@ create_motif_df <- function(motif_result_list, col_to_bin="gene_cluster"){
     ungroup()
 }
 ```
+
+```{r}
+create_motif_enr_plots <- function(enr_df, 
+                                   factor_column="gene_cluster_factor",
+                                   motif_order=NULL,
+                                   summary_stats, 
+                                   expn_df_long,
+                                   motif_colors,
+                                   PWMlist=AP2_PWMlist){
+  # required columns in enr_df: motif_factor_groups, motif, plot_fill, label
+  # required columns in summary_stats: analysis_factor_group, motif,mean, middle_val, ymin, ymax, stat
+  # required columns in expn_df_long: analysis_factor_group, median_val_per_sample
+  
+  # Select the most significant TF motif hit. 
+  top_motifs_per_clust <- enr_df %>% 
+    group_by( !! as.name(factor_column) ) %>% 
+    dplyr::slice(1) %>% 
+    pull(motif, name=motif_factor_groups)
+  
+  top_motifs_per_clust_df <- enr_df %>% 
+    group_by( !! as.name(factor_column) ) %>%  
+    dplyr::slice(1) 
+  
+  # Plot the median expression per bio-replicate of all genes in time-course as a ribbon
+  # add another ribbon of the TF's expression over time. 
+  num <- length(unique(summary_stats$motif))
+  time_ribbon <- ggplot(data=summary_stats,
+         aes(x=analysis_factor_group,
+             y=mean, 
+             group=motif)) +
+    geom_ribbon(aes(ymin=ymin, 
+                    ymax=ymax,
+                    group=motif, 
+                    fill=motif),
+                alpha=0.10) +
+    geom_line(aes(x=analysis_factor_group, 
+                  y=middle_val, group=motif), 
+              linetype="dashed",
+              linewidth=0.5, alpha=0.5) +
+    geom_point(aes(color=analysis_factor_group, shape=stat),
+               size = 3, alpha=0.7) +
+    facet_wrap(~label, 
+               scales='free_y',
+               nrow=num, 
+               strip.position = "left" ) +
+    labs(y="log2 (CPM)", x="") +
+    scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+    scale_fill_manual(values=motif_colors) +
+    theme_classic() +
+    guides(color = guide_legend(title = "Time point")) +
+    theme(
+          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
+          axis.text.y = element_text(color="black"),
+          axis.title.x = element_blank(),
+          plot.margin = margin(l=5, unit="mm"), 
+          strip.placement = "outside", 
+          panel.border = element_rect(fill = NA,colour = c("black")))
+  
+  # Plot the median expression per bio-replicate as a line plot
+  time_cluster <- ggplot(
+    data=expn_df_long,
+         aes(x=analysis_factor_group,
+             y=median_val_per_sample, 
+             color=analysis_factor_group, 
+             group=analysis_factor_group)) +
+    geom_line(aes(x=analysis_factor_group, y=median_val, 
+                  group=!!sym(factor_column)),
+              size=0.5, color="black",
+              alpha=0.75,
+              linetype="longdash") +
+    geom_point(size=2) +
+    scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
+    labs(y="log2 (CPM)", x="") +
+    guides(color = guide_legend(title = "Time point")) +
+    facet_wrap(~label,
+               scales = 'fixed',
+               nrow=9, 
+               strip.position = "left") +
+    theme_classic() +
+    theme(
+          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
+          axis.title.x = element_blank(),
+          plot.margin = margin(l=5, unit="mm"), 
+          strip.placement = "outside", 
+          panel.border = element_rect(fill = NA,colour = c("black")))
+  
+  #Reorder the factor levels and labels so that first factor level is at the top of thte plot
+   labs <- enr_df %>% 
+    arrange(desc(!!sym(factor_column))) %>% 
+    pull(label) %>%
+    unique()
+  relevels <- levels(enr_df[[factor_column]]) %>% rev()
+  enr_df <- enr_df %>%  
+    mutate(y_axis = factor(!!sym(factor_column), levels=relevels)) 
+  
+  # Tile plot of the enrichment scores
+  motif_enr <- ggplot(enr_df, aes(x=motif, y=y_axis, fill=plot_fill)) +
+      geom_tile(height=0.8, width=0.85) +
+      scale_x_discrete(expand = c(0,0)) +
+      scale_y_discrete(expand = c(0,0),
+                       labels=labs) +
+      scale_color_manual(values=c("NS"=NA,"p < 0.05"="black")) +
+      scale_fill_gradient(high="firebrick4",
+                          low=alpha("firebrick1",0.2),
+                          na.value = alpha("grey80", 0.1)) +
+      guides(fill = guide_colorbar(title = "log2 enrichment")) +
+      labs(y="",x="") +
+      theme_classic() +
+      theme(axis.text = element_text(color="black"),
+            axis.text.y = element_text(angle=90,hjust = 0.5),
+            axis.text.x = element_text(angle=20, vjust=1, hjust=1))
+  
+  clust_labs <- enr_df %>% pull(label, name=!!sym(factor_column))
+  incl_hits <- enr_df %>% 
+                group_by(motif_factor_groups) %>% 
+                filter(!is.na(plot_fill)) %>% 
+                ungroup()
+  
+  # Create seqLogo for each of the top hits per cluster 
+  top_logos <- purrr::map(top_motifs_per_clust, function(name){
+    mat <- Matrix(PWMlist[[name]])
+    if(ncol(mat) >= 20){
+      lims <- c(4,21)
+      breaks <- seq(5,20,by=5)
+    }else{
+      lims <- c(1,ncol(mat)+2)
+      breaks <- seq(1,ncol(mat)+2,by=5)
+    }
+    ggseqlogo(mat) +
+      labs(title=name) +
+      suppressMessages(scale_x_continuous(expand = c(0,0), 
+                         limits = lims,
+                         breaks= breaks)) +
+      theme(plot.title = element_text(size=10,vjust = 0.5, hjust = 0.5),
+            axis.text = element_text(size=10),
+            plot.margin = margin())
+  })
+  
+  plots <- list(time_ribbon=time_ribbon,
+                time_cluster=time_cluster,
+                motif_enr=motif_enr, 
+                top_logos=top_logos)
+  return(plots)
+}
+```
+
 
 # Sample Manifest and Expression Data
 
@@ -1736,19 +1880,17 @@ length(pfm) #1956
 ```
 
 ```{r}
-opts <- list(collection="CORE",
-             matrixtype="PWM")
-
-all_PFMs <- readRDS("motif_analysis/JASPAR2022_PWMs.RDS")
+all_PWMs <- readRDS("motif_analysis/JASPAR2022_PWMs.RDS")
+all_PFMs <- readRDS("motif_analysis/JASPAR2022_PFMs.RDS")
 
 length(all_PFMs) #1956
 ```
 
 ```{r}
-motif_annots <- tags(all_PFMs) %>% 
-  c(name(all_PFMs)) %>% 
-  c(matrixClass(all_PFMs) %>%
-      set_names(paste0(names(matrixClass(all_PFMs)), ".class"))) %>% 
+motif_annots <- tags(all_PWMs) %>% 
+  c(name(all_PWMs)) %>% 
+  c(matrixClass(all_PWMs) %>%
+      set_names(paste0(names(matrixClass(all_PWMs)), ".class"))) %>% 
   unlist() %>% 
   data.frame(values=.)  %>% 
   rownames_to_column("motif") %>% 
@@ -1761,6 +1903,7 @@ motif_annots <- tags(all_PFMs) %>%
 
 
 # motif_annots
+dim(motif_annots)
 ```
 
 ```{r}
@@ -1785,14 +1928,13 @@ sel_motif_annots <- motif_annots %>%
   arrange(group_id)
 
 
-sel_motif_annots
+# sel_motif_annots
+dim(sel_motif_annots)
 # write.csv(sel_motif_annots, "motif_analysis/jaspar2022_orthologs.csv", row.names = F)
 ```
 
-
-
 ```{r}
-sapply(all_PFMs[sel_motif_annots$motif], function(x) maxScore(Matrix(x))) %>% 
+sapply(all_PWMs[sel_motif_annots$motif], function(x) maxScore(Matrix(x))) %>% 
   data.frame(score=.) %>% 
   rownames_to_column("motif") %>% 
   arrange(score) %>% 
@@ -1844,7 +1986,7 @@ for (cluster in cluster_nums){
 
   enr <- motif_enrichment_workflow(targets_df = input,
                             col_to_bin = "gene_cluster",
-                            PWMs = all_PFMs[sel_motif_annots$motif],
+                            PWMs = all_PWMs[sel_motif_annots$motif],
                             proms_gr = pf_proms_gr,
                             genome_bs = genome,
                             make_bins = FALSE,
@@ -1880,7 +2022,7 @@ for (profile in profile_nums){
 
   enr <- motif_enrichment_workflow(targets_df = input,
                             col_to_bin = "combined_gene_clusters",
-                            PWMs = all_PFMs[sel_motif_annots$motif],
+                            PWMs = all_PWMs[sel_motif_annots$motif],
                             proms_gr = pf_proms_gr,
                             genome_bs = genome,
                             make_bins = FALSE,
@@ -1941,14 +2083,8 @@ input <- ortho_cluster_motifs_dfs  %>%
 ```
 
 ```{r}
-#getMatrixByID
-# toPWM(x, type=c("log2probratio", "prob"), pseudocounts=0.8, 
-#         bg=c(A=0.25, C=0.25, G=0.25, T=0.25))
-
-```
-
-```{r}
-ortho_motif_PWMs <- all_PFMs[sel_motif_annots$motif]
+ortho_motif_PWMs <- all_PFMs[sel_motif_annots$motif] %>% 
+  toPWM(., type="prob")
 
 vals <- input %>% 
   mutate(plot_fill=ifelse(is.na(plot_fill), 0, plot_fill)) %>% 
@@ -1996,11 +2132,11 @@ expn_top_hits <- expression[unique(pf_ortho_geneids$pfal_gene_id), rownames(inpu
 # head(expn_top_hits)
 # dim(expn_top_hits)
 # head(expn_top_hits)
-unique(expn_top_hits$motif)
+# unique(expn_top_hits$motif)
 ```
 
 ```{r}
-summary_stats_TF <- expn_top_hits %>% 
+summary_stats_TF1 <- expn_top_hits %>% 
   group_by(gene_cluster_factor, 
            analysis_factor_group,
            motif) %>% 
@@ -2040,7 +2176,7 @@ summary_stats <- expn_d456 %>%
          motif, stat, mean, 
          ymin:ymax, label) %>%  
   distinct() %>% 
-  bind_rows(summary_stats_TF) %>% 
+  bind_rows(summary_stats_TF1) %>% 
 
   group_by(gene_cluster_factor) %>%
   mutate(label=as.character(label)) %>%
@@ -2066,11 +2202,8 @@ unique(input$motif)[order(unique(input$motif))]
 ```
 
 ```{r}
-ggthemes::canva_palettes %>% names() %>% grep("bold", ., value = T)
-```
+# ggthemes::canva_palettes %>% names() %>% grep("bold", ., value = T)
 
-
-```{r}
 motif_colors <- c(ggthemes::canva_pal("Simple but bold")(4), ggthemes::canva_pal("Warm and bold")(4))
 motif_colors <- motif_colors[c(2:4,6:8)] %>% 
   set_names(c("time-course cluster",unique(input$motif)))
@@ -2079,170 +2212,13 @@ barplot(rep(1,length(motif_colors)), col=motif_colors)
 ```
 
 ```{r}
-create_motif_enr_plots(enr_df = input, 
+tc_ortho_plots <- create_motif_enr_plots(enr_df = input, 
                        factor_column="gene_cluster_factor",
                        motif_order =  order_motifs_tc,
                        summary_stats = summary_stats, 
                        expn_df_long = expn_d456, 
                        PWMlist = ortho_motif_PWMs,
                        motif_colors = motif_colors)
-```
-
-```{r}
-create_motif_enr_plots <- function(enr_df, 
-                                   factor_column="gene_cluster_factor",
-                                   motif_order=NULL,
-                                   summary_stats, 
-                                   expn_df_long,
-                                   motif_colors,
-                                   PWMlist=AP2_PWMlist){
-  # required columns in enr_df: motif_factor_groups, motif, plot_fill, label
-  # required columns in summary_stats: analysis_factor_group, motif,mean, middle_val, ymin, ymax, stat
-  # required columns in expn_df_long: analysis_factor_group, median_val_per_sample
-  top_motifs_per_clust <- enr_df %>% 
-    group_by( !! as.name(factor_column) ) %>% 
-    dplyr::slice(1) %>% 
-    pull(motif, name=motif_factor_groups)
-  
-  top_motifs_per_clust_df <- enr_df %>% 
-    group_by( !! as.name(factor_column) ) %>%  
-    dplyr::slice(1) 
-
-  num <- unique(summary_stats$motif)
-  time_ribbon <- ggplot(data=summary_stats,
-         aes(x=analysis_factor_group,
-             y=mean, 
-             group=motif)) +
-    geom_ribbon(aes(ymin=ymin, 
-                    ymax=ymax,
-                    group=motif, 
-                    fill=motif),
-                alpha=0.15) +
-    geom_line(aes(x=analysis_factor_group, y=middle_val, group=motif), 
-              linetype="dashed",
-              linewidth=0.5, alpha=0.5) +
-    geom_point(aes(color=analysis_factor_group, shape=stat),
-               size = 3, alpha=0.7) +
-    facet_wrap(~label, scales='free_y', nrow=9) +
-    labs(y="log2 (CPM)", x="") +
-    scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
-    scale_fill_manual(values=motif_colors) +
-    theme_classic() +
-    guides(color = guide_legend(title = "Time point")) +
-    theme(
-          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
-          axis.text.y = element_text(color="black"),
-          axis.title.x = element_blank(),
-          plot.margin = margin(l=5, unit="mm"))
-  
-  time_cluster <- ggplot(
-    data=expn_df_long,
-         aes(x=analysis_factor_group,
-             y=median_val_per_sample, 
-             color=analysis_factor_group, 
-             group=analysis_factor_group)) +
-    geom_line(aes(x=analysis_factor_group, y=median_val, 
-                  group=!!sym(factor_column)),
-              size=0.5, color="black", alpha=0.75,
-              linetype="longdash") +
-    geom_point(size=2) +
-    scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
-    labs(y="log2 (CPM)", x="") +
-    guides(color = guide_legend(title = "Time point")) +
-    facet_wrap(~label,
-               scales = 'fixed',
-               nrow=9) +
-    theme_classic() +
-    theme(
-          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
-          axis.title.x = element_blank(),
-          plot.margin = margin(l=5, unit="mm"))
-  
-  labs <- unique(enr_df$label) %>% rev()
-  motif_enr <- ggplot(enr_df,
-                      aes(x=motif, y=!!sym(factor_column), fill=plot_fill)) +
-    geom_tile(height=0.8, width=0.85) +
-    scale_x_discrete(expand = c(0,0)) +
-    scale_y_discrete(expand = c(0,0),
-                     labels=labs) +
-    scale_color_manual(values=c("NS"=NA,"p < 0.05"="black")) +
-    scale_fill_gradient(high="firebrick4",
-                        low=alpha("firebrick1",0.2),
-                        na.value = alpha("grey80", 0.1)) +
-    guides(fill = guide_colorbar(title = "log2 enrichment")) +
-    labs(y="",x="") +
-    theme_classic() +
-    theme(axis.text = element_text(color="black"), 
-          axis.text.y = element_text(angle=90,hjust = 0.5),
-          axis.text.x = element_text(angle=20, vjust=1, hjust=1))
-  
-  clust_labs <- enr_df %>% pull(label, name=!!sym(factor_column))
-  incl_hits <- enr_df %>% 
-                group_by(motif_factor_groups) %>% 
-                filter(!is.na(plot_fill)) %>% 
-                ungroup()
-  
-  top_logos <- purrr::map(top_motifs_per_clust, function(name){
-    opts <- list(ID=name, matrixtype="PFM")
-    pfm <- TFBSTools::getMatrixSet(JASPAR2020, opts) # can only use 2020 due to R version
-    ggseqlogo(Matrix(pfm)) +
-      labs(title=name) +
-      scale_x_continuous(expand = c(0,0), 
-                         limits = c(4,21),
-                         breaks=seq(5,20,by=5)) +
-      theme(plot.title = element_text(size=10,vjust = 0.5, hjust = 0.5),
-            axis.text = element_text(size=10),
-            plot.margin = margin())
-  })
-  
-  plots <- list(time_ribbon=time_ribbon,
-                time_cluster=time_cluster,
-                motif_enr=motif_enr, 
-                top_logos=top_logos)
-  return()
-}
-```
-
-```{r}
-top_motifs_per_clust[3]
-```
-
-
-```{r}
-ggseqlogo(Matrix(PWMlist[[name]]))
-```
-
-```{r}
-name_m <- top_motifs_per_clust[3]
-opts <- list(ID=name_m, matrixtype="PFM")
-pfm <- TFBSTools::getMatrixSet(JASPAR2020, opts)
-pfm
-# ggseqlogo(Matrix(pfm))
-```
-
-```{r}
-opts <- list(ID="MA0502.2", matrixtype="PFM")
-pfm <- TFBSTools::getMatrixSet(JASPAR2020, opts)
-# pwm <- toPWM(pfm, type="prob")
-# 
-# # pwm
-# # Matrix(pwm)[[1]] %>% colSums()
-# ggseqlogo(pfms_dna$MA0018.2)
-# ggseqlogo(Matrix(pfm))
-ggseqlogo(Matrix(pwm))
-```
-
-```{r}
-
-```
-
-
-
-
-```{r fig.height=10, fig.width=10}
-# time_cluster
-# motif_enr
-top_logos
 ```
 
 ```{r fig.height=10, fig.width=10}
@@ -2261,17 +2237,269 @@ ABK
 wdts <- c(0.5,1,0.75)
 
 
-# svglite("figures/motif_analysis/time_point_cluster_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15,system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
-tc_time_cluster + tc_motif_enr + top_logos[[1]] +
-  top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
-  top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
+# svglite("figures/motif_analysis/time_point_cluster_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15,system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+tc_ortho_plots$time_cluster + tc_ortho_plots$motif_enr + 
+  tc_ortho_plots$top_logos$`cluster1:MA0502.2` +
+  plot_spacer() + 
+  tc_ortho_plots$top_logos$`cluster3:MA0314.2` + 
+  plot_spacer() +
+  tc_ortho_plots$top_logos$`cluster4:MA0316.1` + 
+  tc_ortho_plots$top_logos$`cluster6:MA1644.1` + 
+  plot_spacer() +  
+  tc_ortho_plots$top_logos$`cluster9:MA1644.1` + 
+  plot_spacer() +
   plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
 # dev.off()
+```
 
-# svglite("figures/motif_analysis/time_point_cluster_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
-tc_time_ribbon + tc_motif_enr + top_logos[[1]] +
-  top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
-  top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
+```{r fig.height=10, fig.width=10}
+# svglite("figures/motif_analysis/time_point_cluster_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+tc_ortho_plots$time_ribbon + tc_ortho_plots$motif_enr + 
+  tc_ortho_plots$top_logos$`cluster1:MA0502.2` +
+  plot_spacer() + 
+  tc_ortho_plots$top_logos$`cluster3:MA0314.2` + 
+  plot_spacer() +
+  tc_ortho_plots$top_logos$`cluster4:MA0316.1` + 
+  tc_ortho_plots$top_logos$`cluster6:MA1644.1` + 
+  plot_spacer() +  
+  tc_ortho_plots$top_logos$`cluster9:MA1644.1` + 
+  plot_spacer() +
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# dev.off()
+```
+
+###### Time Course Profiles 
+
+```{r}
+ortho_profile_motifs_dfs <- read.csv("motif_analysis/monaLisa/time_course_profiles_orthologs_results.csv")
+
+in_profiles <- ortho_profile_motifs_dfs  %>%
+  mutate(gene_cluster_factor=as.factor(gene_cluster),
+         label = gene_cluster) %>%
+  group_by(gene_cluster) %>%
+  mutate(plot_fill=case_when(
+    negLog10P > 1.2 ~ log2enr,
+    TRUE ~ NA_real_)) %>%
+  ungroup() %>%
+
+  group_by(motif) %>%
+  filter(!all(is.na(plot_fill))) %>%
+  ungroup() %>%
+
+  mutate(motif_factor_groups=paste0(label,":",motif)) %>%
+  group_by(gene_cluster) %>%
+  arrange(desc(plot_fill), .by_group = T) %>%
+  ungroup() %>%
+  mutate(motif_factor_groups=factor(motif_factor_groups,
+                                    levels=rev(motif_factor_groups))) %>%
+  select(gene_cluster,
+         gene_cluster_factor,
+         motif_factor_groups,
+         plot_fill,log2enr, everything())
+
+
+length(unique(in_profiles$motif))
+unique(in_profiles$motif)
+```
+
+
+```{r}
+ortho_motif_PWMs <- all_PFMs[sel_motif_annots$motif] %>% 
+  toPWM(., type="prob")
+
+vals <- in_profiles %>% 
+  mutate(plot_fill=ifelse(is.na(plot_fill), 0, plot_fill)) %>% 
+  pull(plot_fill, name=motif)
+  
+clust_motifs <- hclust(dist(vals, method="euclidean"))
+# plot(clust_motifs)
+
+order_motifs_profiles <-
+  tail(clust_motifs$labels[clust_motifs$order], n=3) 
+
+
+# input_withOrders <- in_profiles %>%
+#   mutate(motif=factor(motif, 
+#                       levels=rev(order_motifs_profiles)),
+#          gene_cluster_factor=factor(gene_cluster_factor, 
+#                                     levels=rev(levels(gene_cluster_factor))))
+```
+
+
+```{r}
+profile_ortho_geneids <- in_profiles %>% 
+  group_by(gene_cluster) %>% 
+  arrange(desc(negLog10P), .by_group = TRUE) %>% 
+  dplyr::slice(1) %>% 
+  ungroup %>% 
+  filter(!is.na(plot_fill))
+
+
+p_expn_top_hits <- expression[unique(profile_ortho_geneids$pfal_gene_id), rownames(input_d456)] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols=matches("Pf"),
+               names_to="masigpro_id",
+               values_to = "log2_CPM") %>% 
+  left_join(., design_input, by="masigpro_id") %>% 
+  left_join(., select(profile_ortho_geneids, gene_cluster:pfal_gene_id),
+            by=c("gene_id"="pfal_gene_id"), 
+            multiple = "all")
+
+
+unique(p_expn_top_hits$motif)
+```
+
+```{r}
+summary_stats_TF2 <- p_expn_top_hits %>% 
+  group_by(gene_cluster_factor, 
+           analysis_factor_group,
+           motif) %>% 
+  mutate(mean=mean(log2_CPM),
+           sd=sd(log2_CPM),
+           cv=sd/mean, 
+           ymin=mean-sd,
+           ymax=mean+sd,
+           stat="transcription factor"
+          # .groups = 'keep'
+         ) %>% 
+  ungroup() %>% 
+  select(gene_cluster_factor,
+         analysis_factor_group,
+         masigpro_id,
+         motif, stat, mean, 
+         ymin:ymax) %>% 
+  distinct()
+
+profile_labs <- time_course %>% 
+  group_by(combined_gene_clusters) %>% 
+  reframe(label=paste0(combined_gene_clusters,"\n(",length(unique(gene_id))," genes)")) %>% 
+  ungroup() %>% 
+  distinct()
+
+profile_summary_stats <- expn_d456 %>% 
+  select(-label) %>% 
+  mutate(combined_gene_clusters=case_when(
+    grepl("1$|2$",gene_cluster) ~ "Profile1",
+    grepl("3$|8$", gene_cluster) ~ "Profile2",
+    grepl("4$|6$", gene_cluster) ~ "Profile3",
+    grepl("5$|9$", gene_cluster) ~ "Profile4",
+    grepl("7", gene_cluster) ~ "Profile5"
+  )) %>% 
+  mutate(gene_cluster_factor=as.factor(combined_gene_clusters)) %>% 
+  left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
+  
+  group_by(gene_cluster_factor,
+           analysis_factor_group) %>% 
+  mutate(mean=mean(log2_CPM),
+         sd=sd(log2_CPM),
+         cv=sd/mean, 
+         ymin=mean-sd,
+         ymax=mean+sd) %>% 
+  
+  group_by(gene_cluster_factor,
+           analysis_factor_group,
+           masigpro_id) %>% 
+  mutate(stat="time-course profile",
+          mean=mean(log2_CPM),
+          motif="time-course profile",
+         .groups = 'keep') %>% 
+  ungroup() %>%
+  select(gene_cluster_factor,
+         analysis_factor_group, 
+         masigpro_id,
+         motif, stat, mean, ymin:ymax, label) %>% 
+  distinct() %>% 
+  bind_rows(summary_stats_TF2) %>% 
+  
+  group_by(gene_cluster_factor) %>% 
+  mutate(label=as.character(label)) %>% 
+  mutate_at(vars(label), ~ifelse(is.na(.), label[!is.na(label)], .)) %>% 
+  ungroup() %>% 
+  
+  group_by(gene_cluster_factor,analysis_factor_group,stat) %>% 
+  mutate(middle_val=median(mean)) %>% 
+  ungroup() %>% 
+  
+  arrange(gene_cluster_factor,analysis_factor_group) %>% 
+  mutate(label=factor(label, levels=unique(label)))
+
+
+# head(profile_summary_stats)
+
+profile_median_expn <- expn_d456 %>% 
+  select(-label) %>% 
+  mutate(combined_gene_clusters=case_when(
+    grepl("1$|2$",gene_cluster) ~ "Profile1",
+    grepl("3$|8$", gene_cluster) ~ "Profile2",
+    grepl("4$|6$", gene_cluster) ~ "Profile3",
+    grepl("5$|9$", gene_cluster) ~ "Profile4",
+    grepl("7", gene_cluster) ~ "Profile5"
+  )) %>% 
+  mutate(gene_cluster_factor=as.factor(combined_gene_clusters)) %>% 
+  left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
+  
+  group_by(gene_cluster_factor, masigpro_id) %>% 
+  mutate(median_val_per_sample=median(log2_CPM)) %>% 
+  ungroup() %>% 
+  
+  group_by(gene_cluster_factor, analysis_factor_group) %>% 
+  mutate(median_val=median(log2_CPM)) %>% 
+  ungroup()
+```
+
+```{r fig.height=10, fig.width=10}
+# ggthemes::canva_palettes %>% names() %>% grep("bold", ., value = T)
+possible_colors <- c(ggthemes::canva_pal("Simple but bold")(4), ggthemes::canva_pal("Warm and bold")(4))
+# barplot(rep(1,length(possible_colors)), col=possible_colors)
+
+p_motif_colors <- possible_colors[c(2:4,6)] %>% 
+  set_names(c("time-course profile",unique(in_profiles$motif)))
+# barplot(rep(1,length(p_motif_colors)), col=p_motif_colors)
+
+
+profile_ortho_plots <- create_motif_enr_plots(enr_df = in_profiles,
+                       factor_column="gene_cluster_factor",
+                       motif_order =  order_motifs_profiles,
+                       summary_stats = profile_summary_stats,
+                       expn_df_long = profile_median_expn,
+                       PWMlist = ortho_motif_PWMs,
+                       motif_colors = p_motif_colors)
+```
+
+
+```{r fig.height=10, fig.width=10}
+layout_rows <- "
+ABC
+ABD
+ABE
+ABF
+ABG
+"
+
+wdts <- c(0.5,1,0.75)
+
+
+# svglite("figures/motif_analysis/time_point_profiles_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 8, width=12,system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+profile_ortho_plots$time_cluster + profile_ortho_plots$motif_enr + 
+  profile_ortho_plots$top_logos$`Profile1:MA1644.1` +
+  plot_spacer() + 
+  profile_ortho_plots$top_logos$`Profile3:MA1644.1` +
+  profile_ortho_plots$top_logos$`Profile4:MA0540.1` +
+  plot_spacer() +
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# dev.off()
+```
+
+```{r fig.height=5, fig.width=10}
+# svglite("figures/motif_analysis/time_point_profile_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 8, width=12, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+profile_ortho_plots$time_ribbon +
+  profile_ortho_plots$motif_enr +
+  profile_ortho_plots$top_logos$`Profile1:MA1644.1` +
+  plot_spacer() +
+  profile_ortho_plots$top_logos$`Profile3:MA1644.1` +
+  profile_ortho_plots$top_logos$`Profile4:MA0540.1` +
+  plot_spacer() +
   plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
 # dev.off()
 ```
@@ -2291,12 +2519,13 @@ ortholog_pf_ids <- orthoGroups %>%
                 .fns =  ~paste(unique(.), collapse = " / "))) %>% 
   ungroup() %>% 
   distinct() %>% 
-  mutate(label=paste(motif_gene_name,gene_id,sep=":")) %>% 
+  mutate(label=paste(gsub(" ","", motif), gsub(" ","", motif_gene_name), gene_id,sep=": ")) %>% 
   select(gene_id,ortholog_group,label,
          gene_name_or_symbol,p_fam_description,motif:motif_class,
          everything())
 
-ortholog_pf_ids
+# dim(ortholog_pf_ids) # 9 18
+head(ortholog_pf_ids)
 ```
 
 ```{r}
@@ -2312,8 +2541,11 @@ orth_tfs_expn <- expression[ortholog_pf_ids$gene_id, rownames(input_d456)] %>%
 
 
 head(orth_tfs_expn)
-# dim(orth_tfs_expn) # 168  10
+dim(orth_tfs_expn)  # 126  27
+# length(unique(orth_tfs_expn$gene_id)) # 9 OK
 ```
+
+
 
 ```{r fig.height=10, fig.width=10}
 # pdf("figures/combat_seq/ortholog_motif_gene_expression_boxplot.pdf", height = 10, width=10)
@@ -2325,6 +2557,7 @@ ggplot(orth_tfs_expn, aes(x=analysis_factor_group, y=log2_CPM)) +
              size=2, alpha=0.7,
              position = position_jitter()) +
   facet_wrap(~label, scales = "free_x", ncol=3) +
+  labs(x="") +
   scale_fill_viridis_d(direction = -1) +
   scale_color_viridis_d(end=0.925,direction = -1) +
   theme_classic() +
@@ -2334,17 +2567,25 @@ ggplot(orth_tfs_expn, aes(x=analysis_factor_group, y=log2_CPM)) +
 ```
 
 ```{r}
-ortho_tfs_mat <- expression[ortholog_pf_ids$gene_id,rownames(input_d456)]
-rownames(ortho_tfs_mat) <- unique(ortholog_pf_ids$label)
+id_map <- select(orth_tfs_expn, gene_id, label) %>% 
+  distinct()
 
-
-```
-
-```{r}
-# pdf("figures/combat_seq/ortholog_motif_heatmap_log2CPM_heatmap.pdf", height = 10, width = 10)
 heat_colors <- colorRampPalette(viridis::plasma(10))(299)
+annot_col_df <- design_input[rownames(input_d456), ] %>% 
+  droplevels()
+n <- length(levels(annot_col_df$analysis_factor_group))
+annot_colors <- list(analysis_factor_group = ggpubr::get_palette("jco", n) %>% 
+                       set_names(levels(annot_col_df$analysis_factor_group)))
+
+# annot_colors
+
+ortho_tfs_mat <- expression[id_map$gene_id, rownames(input_d456)]
+rownames(ortho_tfs_mat) <- id_map$label
+
+# pdf("figures/combat_seq/ortholog_motif_heatmap_log2CPM_heatmap.pdf", height = 10, width = 15)
 pheatmap::pheatmap(ortho_tfs_mat,
-                   annotation_col = select(design_input, analysis_factor_group),
+                   annotation_col = select(annot_col_df, analysis_factor_group),
+                   annotation_colors = annot_colors,
                    color = heat_colors)
 # dev.off()
 ```
@@ -2355,10 +2596,11 @@ range_expn <- range(scale(t(ortho_tfs_mat)))
 myBreaks <- c(seq(range_expn[1], 0, length.out=ceiling(paletteLength/2) + 1), 
               seq(range_expn[2]/paletteLength, range_expn[2], length.out=floor(paletteLength/2)))
 
-# pdf("figures/combat_seq/ortholog_motif_heatmap_row_zscores_heatmap.pdf", height = 10, width = 10)
+# pdf("figures/combat_seq/ortholog_motif_heatmap_row_zscores_heatmap.pdf", height = 10, width = 15)
 pheatmap::pheatmap(ortho_tfs_mat,
                    annotation_col = select(design_input, analysis_factor_group),
                    scale = "row",breaks = myBreaks,
+                   annotation_colors = annot_colors,
                    color = colorRampPalette(viridis::turbo(10))(299))
 # dev.off()
 ```
