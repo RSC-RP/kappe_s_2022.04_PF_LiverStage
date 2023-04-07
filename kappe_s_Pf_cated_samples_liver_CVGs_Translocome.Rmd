@@ -1257,6 +1257,11 @@ pexel_summary_stats <- pexel_expn_long %>%
 pexel_summary_stats
 # write.csv(pexel_summary_stats, "cvgs_pexel_domains/pexel_motif_hits_150aa_expression_TPM.csv", row.names = FALSE)
 ```
+# SignalP Results
+
+```{bash }
+
+```
 
 
 # Integrate SignalP and TM domains

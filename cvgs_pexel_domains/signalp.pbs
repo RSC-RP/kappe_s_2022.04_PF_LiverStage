@@ -1,0 +1,36 @@
+#!/bin/bash
+
+
+#PBS -P 207f23bf-acb6-4835-8bfe-142436acb58c
+#PBS -q sceaq
+#PBS -N signalp6
+#PBS -l select=1:ncpus=2:mem=64g
+#PBS -l walltime=24:00:00
+#PBS -j oe
+
+
+# Define Environment
+cd $PBS_O_WORKDIR
+# SIGNALP_DIR=/home/jsmi26/miniconda3/envs/signalp/bin
+# export PATH=$SIGNALP_DIR:$PATH
+# export PATH=$HOME/miniconda3/bin:$PATH
+source ~/.bashrc
+conda activate signalp
+
+
+# Define data
+# FASTAFILE="cvgs_pexel_domains/PF3D7_100aa_nterm_protein.fasta"
+FASTAFILE="cvgs_pexel_domains/PF3D7_full_length_protein.fasta"
+OUTDIR="cvgs_pexel_domains/signalp6.0"
+ORGANISM="eukarya"
+
+
+# Run the predictions
+signalp6 \
+    --fastafile $FASTAFILE \
+    --output_dir $OUTDIR \
+    --mode slow-sequential \
+    --organism $ORGANISM \
+    --bsize 10 \
+    --write_procs 8 \
+    --format txt
