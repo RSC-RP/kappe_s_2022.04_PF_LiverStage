@@ -698,47 +698,7 @@ conflicted::conflict_prefer("mutate","dplyr")
 ```
 
 ```{r}
-apicoplast_genes <- read.delim("expression_data/gene_annots/PF3D7_Apicoplast_GenesBySubcellularLocalization_Summary.txt", sep="\t") %>% 
-  janitor::clean_names()
-
-# head(apicoplast_genes)
-# dim(apicoplast_genes) #506
-```
-
-```{r warning=FALSE, eval=FALSE}
-apicoTP <- tabulizer::extract_tables("references/PEXEL/pone.0036598.s009.pdf") %>% 
-  lapply(., as.data.frame) %>% 
-  bind_rows() %>% 
-  set_colnames(., value=.[1,]) %>%
-  janitor::clean_names() %>% 
-  filter(!grepl("Gene", gene_id1)) %>% 
-  pivot_longer(cols = everything(),
-               names_to = "type",
-               values_to = "value") %>%
-  filter(!grepl("description", type)) %>% 
-  mutate(type=gsub("[12]$","", type)) %>% 
-  pivot_wider(names_from = type,
-              values_from = value) %>% 
-  unnest(cols=c("gene_id"))
-
-dim(apicoTP)
-# write.csv(apicoTP, "apicoTP_old_ids.csv", row.names = FALSE)
-```
-
-```{r}
-apicoTP_update <- read.csv("expression_data/gene_annots/apicoTP_GeneByLocusTag_Summary.csv") %>% 
-  janitor::clean_names() %>% 
-  select(-source_id) %>% 
-  distinct()
-
-# head(apicoTP_update)
-dim(apicoTP_update) #535   8
-# table(duplicated(apicoTP_update$gene_id))
-# unique(c(apicoplast_genes$gene_id, apicoTP_update$gene_id)) %>% length() #757
-```
-
-```{r}
-mito_genes <- rowData(cb_se) %>% 
+mito_genes <- PF3D7_gene_annots %>% 
   as.data.frame() %>% 
   filter(seqnames == "Pf3D7_MIT_v3" | grepl("mitochondrial", description, ignore.case = TRUE))
 
@@ -1295,11 +1255,6 @@ pexel_summary_stats
 #### Expression threshold
 
 ```{r}
-as.data.frame(rowData(cb_se))  %>% 
-  filter(is.na(gene_name))
-```
-
-```{r}
 pexel_expn_threshold_1TPM <- pexel_summary_stats %>% 
   filter(n_matches_canonical_RLEDQ > 0 ) %>% 
   mutate(passed_threshold=case_when(
@@ -1366,7 +1321,7 @@ Heatmap(matrix = mat,
         show_column_names = TRUE,
         row_title_gp = gpar(fontsize = 6),
         column_names_gp = gpar(fontsize=6),
-        row_names_gp = gpar(fontsize = 4))
+        row_names_gp = gpar(fontsize = 2))
 # dev.off()
 ```
 
@@ -1396,6 +1351,25 @@ pexel_filtered_1TPM
 qsub references/signalp.pbs
 ```
 
+```{r}
+known_exported <- read.csv("references/PEXEL/export proteins from PlasmoDB.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(has_signal_pep=!grepl("N\\/A", signal_p_peptide))
+
+head(known_exported)
+table(known_exported$has_signal_pep)
+# FALSE  TRUE 
+#   257   165 
+
+table(duplicated(known_exported$gene_id))
+```
+
+```{r}
+known_exported %>% 
+  filter(duplicated(gene_id) | duplicated(gene_id, fromLast=TRUE))
+```
+
+
 `prediction_results.txt`
 A tab delimited file with one line per prediction. 
 Columns:  
@@ -1421,21 +1395,38 @@ The start and end positions of all predicted signal peptides in GFF3 format.
 signalp_gtf <- rtracklayer::import("cvgs_pexel_domains/signalp6.0/output.gff3") %>% 
   as.data.frame() %>% 
   mutate(seqnames=gsub("\\-",".", seqnames)) %>% 
-  arrange(desc(score))
+  arrange(desc(score)) %>% 
+  mutate(gene_id=gsub("\\.[0-9]\\.p[0-9]$","", seqnames)) %>% 
+  left_join(.,select(PF3D7_gene_annots,gene_id, gene_name, description), by="gene_id")
 
 
 signalp_gtf #597 seq
 # table(end(signalp_gtf)) # all are less 100amino acids  
 # table(start(signalp_gtf))
 
-quantile(signalp_gtf$score)
+# quantile(signalp_gtf$score)
 #        0%       25%       50%       75%      100% 
 # 0.5000094 0.8330923 0.9996170 0.9998040 1.0000316 
 ```
 
+```{r}
+table(known_exported$gene_id %in% signalp_gtf$gene_id)
+# FALSE  TRUE 
+#   296   126
+
+table(known_exported$has_signal_pep)
+```
+
+```{r}
+known_exported %>% 
+  left_join(., signalp_gtf, by="gene_id", multiple='all') %>% 
+  group_by(has_signal_pep, source) %>% 
+  dplyr::count()
+
+# 116/165*100 == 70% identified by signalP 6.0
+```
 
 # Integrate SignalP and TM domains
-
 
 ```{r}
 signalp_pexel_results <- signalp_gtf %>% 
@@ -1447,59 +1438,18 @@ signalp_pexel_results <- signalp_gtf %>%
          score,
          matches("start|end"), 
          everything())
-```
 
+subset_summary <- select(pexel_summary_stats, gene_id, matches("TPM")) %>% 
+  filter(gene_id %in% signalp_pexel_results$gene_id) %>% 
+  distinct()
 
-```{r}
-apicoplast_ids <- unique(c(apicoplast_genes$gene_id, apicoTP_update$gene_id))
+signalp_pexel_results <- signalp_pexel_results %>% 
+  left_join(., subset_summary, by="gene_id")
 
-Pf_domain_annots <- read.delim("expression_data/gene_annots/P33D7_transmembrane_signal_peptides_Summary.txt", sep = "\t") %>% 
-  janitor::clean_names()  %>% 
-  filter(!gene_id %in% mito_genes$gene_id) %>% 
-  mutate_at(vars(signal_p_peptide,x_tm_domains), ~gsub("N/A",NA, .)) %>%
-  
-  group_by(gene_id) %>% 
-  mutate(has_signal_peptide=any(!is.na(signal_p_peptide)),
-         has_tm_domain=case_when(
-           any(x_tm_domains > 0) ~ TRUE,
-           TRUE ~ FALSE
-         ),
-         apicoplast_protein=gene_id %in% apicoplast_ids) %>% 
-  ungroup() %>% 
-  #de-duplicate gene_ids 
-  select(-source_id, -signal_p_peptide, 
-         -x_tm_domains,-matches("p_fam"), 
-         -product_description) %>% 
-  distinct() %>% 
-  
-  left_join(., pexel_hits_bool, by="gene_id") %>%
-  select(gene_id,
-         any_pexel_domain,
-         matches("peptide|tm.domain"),
-         apicoplast_protein,
-         matches("has_pexel_domain"),
-         everything())
+dim(signalp_pexel_results)
+length(unique(signalp_pexel_results$gene_id)) #35 gene_ids
 
-head(Pf_domain_annots)
-dim(Pf_domain_annots)  # 5598    8
-# any(duplicated(Pf_domain_annots$gene_id)) #FALSE
-# write.csv(Pf_domain_annots, "cvgs_pexel_domains/pexel_tm_apicoplast_gene_annots.csv", row.names = F)
-```
-
-```{r}
-table(Pf_domain_annots$has_signal_peptide)
-table(Pf_domain_annots$has_tm_domain)
-table(Pf_domain_annots$apicoplast_protein)
-table(Pf_domain_annots$any_pexel_domain)
-```
-
-```{r}
-Pf_domain_annots[,grep("pexel", colnames(Pf_domain_annots))] %>% 
-  sapply(., function(x) sum(x, na.rm = T)) %>% 
-  as.data.frame() 
-
-# Pf_domain_annots[,grep("pexel", colnames(Pf_domain_annots))] %>% 
-#   sapply(., function(x) sum(is.na(x))) 
+# write.csv(signalp_pexel_results, "cvgs_pexel_domains/pexel_motif_hits_150aa_signalP_hits_100aa_expression_TPM.csv", row.names = FALSE)
 ```
 
 
@@ -1510,29 +1460,51 @@ library(ggVennDiagram)
 ```
 
 ```{r}
-cols <- c("has_signal_peptide","has_tm_domain","apicoplast_protein")
-gene_lists <- lapply(cols, function(col){
-  idx <- Pf_domain_annots[[col]]
-  Pf_domain_annots$gene_id[idx]
-})
-names(gene_lists) <- cols
+table(samples_include$analysis_factor_group)
+```
 
-# gene_lists
+```{r}
+summary_expressed_1TPM <- TPM[,c("gene_name", samples_include$sample_id_cat)] %>% 
+  filter(!gene_name %in% mito_genes$gene_id) %>% 
+  pivot_longer(cols = -gene_name,
+               names_to="sample_id_cat",
+               values_to = "TPM") %>% 
+  inner_join(samples_include, by="sample_id_cat") 
+
+any_expressed_1TPM <- summary_expressed_1TPM %>% 
+  arrange(gene_name) %>% 
+  group_by(analysis_factor_group, gene_name) %>%
+  reframe(expression_GT.1TPM = sum(TPM > 1.0) == 3) %>%
+  ungroup() %>%
+  arrange(gene_name) %>% 
+  filter(expression_GT.1TPM)
+
+
+# head(any_expressed_1TPM)
+# tail(any_expressed_1TPM)
+length(unique(any_expressed_1TPM$gene_name)) #4743
+```
+
+```{r}
+pexel_ids <- pexel_hits_bool$gene_id[pexel_hits_bool$has_pexel_domain_canon_RLEDQ] %>% unique()
+expn_1TPM_ids <- any_expressed_1TPM %>% pull(gene_name) %>% unique()
+signal_p_ids <- signalp_gtf$gene_id
+
+gene_lists <- list(pexel_ids=pexel_ids, expn_1TPM_ids=expn_1TPM_ids, signal_p_ids=signal_p_ids)
 sapply(gene_lists, length)
 ```
 
 ```{r fig.height=7, fig.width=7, eval=FALSE}
-# svglite::svglite("figures/tm_signal_apicoplast_venn.svg", height = 10, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+svglite::svglite("figures/uncorrected/cvgs_pexel/pexel_signalP_expression_1TPM_venn.svg", height = 10, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 ggVennDiagram(gene_lists,
               label_alpha=0.2,
               label_geom = "label",
-              set_size=6, 
+              set_size=3, 
               label_size=6) + 
-  scale_color_manual(values=c(viridis::viridis(n = 3))) +
+  scale_color_manual(values=c(viridis::mako(n = 3, end = 0.8))) +
   scale_fill_gradient(low="aliceblue", high = "deepskyblue3", 
                       name="Number of Genes")
-  # theme(axis.text = element_text(size=4))
-# dev.off()
+dev.off()
 ```
 
 
