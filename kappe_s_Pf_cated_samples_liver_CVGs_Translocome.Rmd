@@ -617,6 +617,7 @@ dim(counts)
 
 ```{r}
 TPM <- read.csv("expression_data/kappe_s_PfHsMmu_PF3D7_TPM.csv")
+rownames(TPM) <- TPM$gene_name
 
 head(TPM)
 ```
@@ -627,6 +628,15 @@ head(TPM)
 PF3D7 <- AnnotationDbi::loadDb("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7.sqlite")
 # PF3D7
 ```
+
+```{r}
+PF3D7_gene_annots <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_annots.csv") %>% 
+  filter(genome=="PF3D7")
+
+dim(PF3D7_gene_annots)
+head(PF3D7_gene_annots)
+```
+
 
 ```{r}
 genome <- Biostrings::readDNAStringSet("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_Genome.fasta")
@@ -649,7 +659,6 @@ length(proteins_aa) #5389
 # names(proteins_aa) <- gsub("^(PF3D7.+p[0-9])\\s.+","\\1",names(proteins_aa))
 # Biostrings::writeXStringSet(proteins_aa, "cvgs_pexel_domains/PF3D7_full_length_protein.fasta")
 ```
-
 ```{r}
 cds_fasta <- Biostrings::readDNAStringSet("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_AnnotatedCDSs.fasta")
 
@@ -759,15 +768,17 @@ table(cvgs$type)
 ```{r}
 sel_samps <- pf_samples %>% 
   filter(!grepl("Day[02]", time_point))
+
 table(sel_samps$analysis_factor_group)
 ```
 
 ```{r}
-rownames(TPM) <- TPM$gene_name
-# cvg_expn <- log2(TPM[,sel_samps$sample_id_cat]+1)
-cvg_expn <- log2(assay(cb_se,"cpm")+1)[,sel_samps$sample_id_cat]
-include <- intersect(cvgs$gene_id, rownames(cvg_expn))
+cvg_expn <- log2(TPM[,sel_samps$sample_id_cat]+1)
+# cvg_expn <- log2(assay(cb_se,"cpm")+1)[,sel_samps$sample_id_cat]
+include <- base::intersect(cvgs$gene_id, rownames(cvg_expn))
 cvg_expn <- cvg_expn[include,]
+# table(rowSums(cvg_expn) > 0) #131  remove all zero count genes
+cvg_expn <- cvg_expn[rowSums(cvg_expn) > 0, ]
 
 # head(cvg_expn[,1:5])
 dim(cvg_expn) #316  17
@@ -811,10 +822,10 @@ cvg_expn_long <- cvg_expn %>%
   rownames_to_column("gene_id") %>% 
   pivot_longer(cols = -gene_id,
                names_to = "sample_id_cat",
-               values_to = "log2CPM") %>% 
+               values_to = "log2TPM") %>% 
   inner_join(., pf_samples, by="sample_id_cat") %>%
   left_join(., cvgs, by=c("gene_id")) %>%
-  select(gene_id:log2CPM, type, product, everything())
+  select(gene_id:log2TPM, type, product, everything())
 
 cvg_expn_long
 # table(cvg_expn_long$type)
@@ -827,23 +838,23 @@ purrr::map(sheet_names, function(cvg_type){
     filter(time_point == "Day6") %>% 
     filter(type==cvg_type) %>% 
     group_by(gene_id) %>% 
-    mutate(mean_expn=mean(log2CPM)) %>% 
+    mutate(mean_expn=mean(log2TPM)) %>% 
     ungroup() %>% 
     arrange(desc(mean_expn)) %>% 
     mutate(gene_id=factor(gene_id, levels = unique(gene_id))) %>% 
-    select(gene_id:log2CPM, mean_expn, everything())
+    select(gene_id:log2TPM, mean_expn, everything())
   
   n <- length(unique(input$gene_id))
   fig_width <- ifelse(n<=11, 4, 15)
   
-  # svglite(paste0("figures/combat_seq/cvgs_pexel/cvg_", cvg_type,"_expression_boxplot.svg"),
-  #         fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = fig_width)
+  # svglite(paste0("figures/uncorrected/cvgs_pexel/cvg_", cvg_type,"_TPM_expression_boxplot.svg"),
+          # fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = fig_width)
   print(ggplot(input, 
-         aes(x=gene_id, y=log2CPM, fill=analysis_factor_group)) +
+         aes(x=gene_id, y=log2TPM, fill=analysis_factor_group)) +
     geom_boxplot(color="grey50", alpha=0.2) +
     geom_point(aes(color=analysis_factor_group), 
                position = position_jitter(width = 0.3),
-               size=2) +
+               size=2, alpha=0.75) +
     scale_fill_manual(values=ggpubr::get_palette("npg",4)[4]) +
     scale_color_manual(values=ggpubr::get_palette("npg",4)[4]) +
     facet_wrap(~type, scale="free_x") +
@@ -855,7 +866,6 @@ purrr::map(sheet_names, function(cvg_type){
   # dev.off()
 })
 ```
-
 
 ```{r fig.height=10, fig.width=10}
 colanno <- sel_samps %>% 
@@ -886,24 +896,30 @@ gap_index <- rowanno %>%
 rowanno <- rowanno %>%
   mutate(CVG_type=factor(CVG_type, levels=unique(gap_index$CVG_type))) %>%
   arrange(CVG_type)
+
 gene_order <- rownames(rowanno)
 rowanno <- rowanno %>% 
   HeatmapAnnotation(df = . , which = "row",
                     col = list(CVG_type=ggpubr::get_palette(palette = "npg", 6) %>%
                                         set_names(unique(rowanno$CVG_type))))
 
-heat_colors <- colorRampPalette(viridis::turbo(10))(299)
+# heat_colors <- colorRampPalette(viridis::turbo(10))(299)
+# quantile(as.matrix(cvg_expn[gene_order, ]), probs = seq(0,1,length.out=11))
+heat_colors <- circlize::colorRamp2(breaks=c(0,1,3,6,9), colors = viridis::turbo(5))
+mat <- as.matrix(cvg_expn[gene_order, ]) 
+colnames(mat) <- sel_samps$analysis_group_id
 
-# pdf("figures/combat_seq/cvgs_pexel/CGVs_timepoints_log2CPM_heatmap.pdf", height = 12, width = 10)
-Heatmap(matrix = cvg_expn[gene_order, ], 
+# pdf("figures/uncorrected/cvgs_pexel/CGVs_timepoints_D456_log2TPM_heatmap.pdf", height = 12, width = 10)
+Heatmap(matrix = mat, 
         col = heat_colors,
-        name = "log2 CPM",
+        name = "log2 TPM",
         split = gap_index,
         top_annotation = colanno, 
         left_annotation = rowanno, 
-        show_column_names = FALSE,
+        show_column_names = TRUE,
         row_title_gp = gpar(fontsize = 6),
         # row_title_rot = 270,
+        column_names_gp = gpar(fontsize=6),
         row_names_gp = gpar(fontsize = 6))
 # dev.off()
 ```
@@ -991,22 +1007,29 @@ pexel_hits <- purrr::map(.x = pexel_motif_patterns,
 
 lapply(pexel_hits, head)
 lapply(pexel_hits, dim)
+
 # saveRDS(pexel_hits,"cvgs_pexel_domains/pexel_motif_search_150aa_results_list.RDS")
+
+
+new_col_names <- lapply(pexel_motifs$motif_name, 
+                        function(x) paste(c("n_matches","match","position"), x, sep="_")) %>%
+  unlist()
+
+pexel_hits_all <- purrr::reduce(pexel_hits, left_join, by="aa_name") %>%
+  rename_at(vars(matches("match|position")), ~new_col_names)
+
+# write.csv(pexel_hits_all, "cvgs_pexel_domains/pexel_motif_search_150aa_results.csv")
 ```
 
 ```{r}
 pexel_hits_all <- read.csv("cvgs_pexel_domains/pexel_motif_search_150aa_results.csv", row.names = 1)
 
-# new_col_names <- lapply(pexel_motifs$motif_name, function(x) paste(c("n_matches","match","position"), x, sep="_")) %>% unlist()
-# pexel_hits_all <- purrr::reduce(pexel_hits, left_join, by="aa_name") %>%
-#   rename_at(vars(matches("match|position")), ~new_col_names)
-# 
+
 head(pexel_hits_all)
 dim(pexel_hits_all) #5389   19
 
-# pexel_hits_all[,grep("n_matches", colnames(pexel_hits_all))] %>% 
+# pexel_hits_all[,grep("n_matches", colnames(pexel_hits_all))] %>%
 #   sapply(., table)
-# write.csv(pexel_hits_all, "cvgs_pexel_domains/pexel_motif_search_150aa_results.csv")
 ```
 
 ```{r}
@@ -1037,7 +1060,19 @@ pexel_hits_bool <- pexel_hits_all %>%
 pexel_hits_bool %>% head #5,318
 # table(duplicated(pexel_hits_bool$gene_id)) # FALSE
 # table(pexel_hits_bool$any_pexel_domain) #2346
-# table(pexel_hits_bool$has_pexel_domain_canon_RLEDQ) #669 genes
+table(pexel_hits_bool$has_pexel_domain_canon_RLEDQ) #669 genes
+```
+
+
+```{r}
+# pexel_hits_bool
+chk <- pexel_hits_all %>% 
+  mutate(gene_id=gsub("\\.[0-9]+.+","",aa_name)) %>% 
+  filter(n_matches_canonical_RLEDQ > 0) %>% 
+  select(gene_id, aa_name, n_matches_canonical_RLEDQ)
+
+length(unique(chk$gene_id))
+length(unique(chk$aa_name))
 ```
 
 ```{r}
@@ -1082,7 +1117,7 @@ UpSetR::upset(data=input,
 # table(input$has_pexel_domain_canon_RLEDQ)
 ```
 
-### PEXEL/PTEX Gene Expression 
+### PTEX Gene Expression 
 
 -	EXP2 (PF3D7_1471100)
 -	PTEX 150 (PF3D7_1436300)
@@ -1092,9 +1127,7 @@ UpSetR::upset(data=input,
 
 ```{r}
 ptex_ids <- c("PF3D7_1471100","PF3D7_1436300","PF3D7_1116800","PF3D7_1345100","PF3D7_1105600")
-```
 
-```{r}
 samples_include <- pf_samples %>% 
   filter(!grepl("Day[02]", time_point))
 
@@ -1105,7 +1138,7 @@ table(samples_include$analysis_factor_group)
 # ptex_expn <- log2(assay(cb_se,"cpm")+1)
 rownames(TPM) <- TPM$gene_name
 log2_TPM_expn <- log2(TPM[,samples_include$sample_id_cat]+1)
-include <- intersect(ptex_ids, rownames(log2_TPM_expn))
+include <- base::intersect(ptex_ids, rownames(log2_TPM_expn))
 ptex_expn <- log2_TPM_expn[include,]
 head(ptex_expn[,1:5])
 # dim(ptex_expn) 
@@ -1143,6 +1176,9 @@ ggplot(ptex_expn_long, aes(x=analysis_factor_group, y=log2TPM, fill=gene_id)) +
 ```
 
 ```{r}
+labels <- c("PF3D7_1471100"="EXP2","PF3D7_1436300"="PTEX150", "PF3D7_1116800"="HSP101", "PF3D7_1345100"="TRX2", "PF3D7_1105600"="PTEX88")
+
+
 summary_ptex_expn <- ptex_expn_long %>% 
   group_by(time_point,gene_id) %>% 
   summarise(median=median(log2TPM), 
@@ -1160,7 +1196,8 @@ pd <- position_dodge(width = 0.5)
 ggplot(summary_ptex_expn, aes(x=time_point, y=median, group=gene_id)) +
   geom_line(aes(color=gene_id), alpha=0.8, 
             position = pd) +
-  geom_point(aes(color=gene_id), alpha=0.8, 
+  geom_point(aes(color=gene_id), 
+             alpha=0.8, size=2.5,
              position = pd) + 
   geom_errorbar(aes(ymin=median-sd, ymax=median+sd, color=gene_id),
                 width=0.25,
@@ -1174,7 +1211,7 @@ ggplot(summary_ptex_expn, aes(x=time_point, y=median, group=gene_id)) +
 ```
 
 
-### PEXEL 
+### PEXEL Gene Expression
 
 pexel_hits_all
 
@@ -1183,7 +1220,7 @@ pexel_genes_ided <- pexel_hits_bool$gene_id[pexel_hits_bool$any_pexel_domain]
 # length(pexel_genes_ided)
 
 # non-log expression 
-include_pexel <- intersect(pexel_genes_ided, rownames(TPM))
+include_pexel <- base::intersect(pexel_genes_ided, rownames(TPM))
 pexel_expn <- TPM[include_pexel,samples_include$sample_id_cat]
 
 head(pexel_expn[,1:5])
@@ -1205,19 +1242,13 @@ table(pexel_expn_long$analysis_factor_group)
 ```
 
 ```{r}
-
-
-
-```
-
-```{r}
 expn_to_add <- pexel_expn %>% 
   rownames_to_column("gene_id") %>% 
   rename_at(vars(-gene_id), ~samples_include$analysis_group_id %>% 
               gsub("_Heps|_Pf\\+", "", .) %>% 
               paste0(.,"_TPM"))
 
-expn_to_add %>% head()
+# expn_to_add %>% head()
 ```
 
 ```{r}
@@ -1226,11 +1257,13 @@ pexel_hits_all_toAdd <- pexel_hits_all %>%
   select(gene_id, aa_name, everything())
 
 head(pexel_hits_all_toAdd)
+dim(pexel_hits_all_toAdd)
+table(pexel_hits_all_toAdd$n_matches_canonical_RLEDQ)
 ```
 
 ```{r}
 pexel_summary_stats <- pexel_expn_long %>% 
-  mutate(expression_boolean=TPM >= 1.0)  %>% 
+  mutate(expression_boolean= TPM >= 1.0)  %>% 
   group_by(time_point, gene_id) %>% 
   summarise(number_samples_expressing_GT1.0_TPM=sum(expression_boolean), 
          mean_TPM=mean(TPM), 
@@ -1257,14 +1290,165 @@ pexel_summary_stats <- pexel_expn_long %>%
 pexel_summary_stats
 # write.csv(pexel_summary_stats, "cvgs_pexel_domains/pexel_motif_hits_150aa_expression_TPM.csv", row.names = FALSE)
 ```
+
+
+#### Expression threshold
+
+```{r}
+as.data.frame(rowData(cb_se))  %>% 
+  filter(is.na(gene_name))
+```
+
+```{r}
+pexel_expn_threshold_1TPM <- pexel_summary_stats %>% 
+  filter(n_matches_canonical_RLEDQ > 0 ) %>% 
+  mutate(passed_threshold=case_when(
+    Day4_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+    Day5_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+    Day6_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+    TRUE ~ "No"
+  )) %>% 
+  left_join(., PF3D7_gene_annots, by="gene_id") %>% 
+  select(aa_name, gene_name, passed_threshold, 
+         gene_id:position_canonical_RLEDQ,
+         matches("Day[0-9]_number_samples_expressing"),
+         seqnames:strand, description) 
+  # select(aa_name, gene_name:gene_id, passed_threshold, 
+  #        n_matches_canonical_RLEDQ:position_canonical_RLEDQ)
+
+dim(pexel_expn_threshold_1TPM)
+table(pexel_expn_threshold_1TPM$passed_threshold)
+#  No Yes 
+# 302 380 
+```
+```{r fig.height=20, fig.width=12}
+# pexel_expn
+canon_gene_ids <- pexel_hits_bool$gene_id[pexel_hits_bool$has_pexel_domain_canon_RLEDQ]
+
+canon_expn <- log2(pexel_expn[canon_gene_ids, ]+1)
+# dim(canon_expn) #669
+
+colanno <- samples_include %>% 
+  select(time_point=analysis_factor_group) %>% 
+  HeatmapAnnotation(df = ., which = "column",
+                    col = list(time_point=ggpubr::get_palette("jco",5) %>%
+                                          set_names(unique(pf_samples$analysis_factor_group))))
+
+rowanno_df <- pexel_expn_threshold_1TPM %>% 
+  mutate(label=case_when(
+    !grepl("PF3D7", gene_name) ~ paste(gene_id,gene_name,sep=": "), 
+    TRUE ~ gene_id)) %>% 
+  select(label,gene_id, passed_threshold) %>% 
+  distinct()
+
+rowanno <- rowanno_df %>% 
+  select(label, passed_threshold) %>%
+  column_to_rownames("label") %>% 
+  as.data.frame() %>% 
+  HeatmapAnnotation(df = . , which = "row",
+                    col = list(passed_threshold=ggpubr::get_palette(palette = "npg", 2) %>%
+                                        set_names(unique(rowanno_df$passed_threshold))))
+
+# heat_colors <- colorRampPalette(viridis::turbo(10))(299)
+# quantile(as.matrix(canon_expn), probs = seq(0,1,length.out=11))
+heat_colors <- circlize::colorRamp2(breaks=c(0,1,3,6,9,12), colors = viridis::turbo(6))
+mat <- as.matrix(canon_expn[rowanno_df$gene_id, samples_include$sample_id_cat])
+colnames(mat) <- samples_include$analysis_group_id
+rownames(mat) <- rowanno_df$label
+
+# pdf("figures/uncorrected/cvgs_pexel/PEXEL_canonical_timepoints_D456_log2TPM_heatmap.pdf", height = 20, width = 12)
+Heatmap(matrix = mat, 
+        col = heat_colors,
+        name = "log2 TPM",
+        top_annotation = colanno, 
+        left_annotation = rowanno,
+        # split = gap_index,
+        show_column_names = TRUE,
+        row_title_gp = gpar(fontsize = 6),
+        column_names_gp = gpar(fontsize=6),
+        row_names_gp = gpar(fontsize = 4))
+# dev.off()
+```
+
+
+```{r}
+pexel_filtered_1TPM <- pexel_expn_threshold_1TPM %>% 
+  filter(passed_threshold == "Yes") %>% 
+  select(aa_name,gene_name, gene_id, 
+         position_canonical_RLEDQ, match_canonical_RLEDQ, n_matches_canonical_RLEDQ) %>% 
+  separate(position_canonical_RLEDQ, into=paste0("hit",1:3), sep="; ", remove = FALSE, fill = "right") %>% 
+  pivot_longer(., cols = c(hit1:hit3), names_to="number_pexel_hits", values_to = "position") %>% 
+  filter(!is.na(position)) %>% 
+  separate(position, into=c("start", "end"), sep="-") %>% 
+  mutate_at(vars(start,end), ~as.numeric(.)) %>% 
+  mutate(seqnames=aa_name)  %>% 
+  arrange(seqnames) %>% 
+  select(seqnames, start, end, everything(), -number_pexel_hits)
+  # plyranges::as_granges()
+
+pexel_filtered_1TPM
+```
+
+
 # SignalP Results
 
-```{bash }
+```{bash eval=FALSE}
+qsub references/signalp.pbs
+```
 
+`prediction_results.txt`
+A tab delimited file with one line per prediction. 
+Columns:  
+- ID: the sequence ID parsed from the fasta input.
+- Prediction: The predicted type. One of [`OTHER` (No SP), `SP` (Sec/SPI), `LIPO` (Sec/SPII), `TAT` (Tat/SPI), `TATLIPO` (Tat/SPII), `PILIN` (Sec/SPIII)].
+- One column for each possible type with the model's probability.
+- CS Position: The cleavage site. The sequence positions between which the SPase cleaves and its predicted probability.
+
+
+```{r}
+signalp_res <- read.delim("cvgs_pexel_domains/signalp6.0/prediction_results.txt", sep='\t', comment.char = "#", header = FALSE) %>% 
+  rename_all(~c("id","prediction_type","prob_other","prob_signal_pep","cleavage_site_position")) %>% 
+  arrange(desc(prob_signal_pep))
+
+signalp_res
+```
+
+`output.gff3`
+The start and end positions of all predicted signal peptides in GFF3 format.
+
+
+```{r}
+signalp_gtf <- rtracklayer::import("cvgs_pexel_domains/signalp6.0/output.gff3") %>% 
+  as.data.frame() %>% 
+  mutate(seqnames=gsub("\\-",".", seqnames)) %>% 
+  arrange(desc(score))
+
+
+signalp_gtf #597 seq
+# table(end(signalp_gtf)) # all are less 100amino acids  
+# table(start(signalp_gtf))
+
+quantile(signalp_gtf$score)
+#        0%       25%       50%       75%      100% 
+# 0.5000094 0.8330923 0.9996170 0.9998040 1.0000316 
 ```
 
 
 # Integrate SignalP and TM domains
+
+
+```{r}
+signalp_pexel_results <- signalp_gtf %>% 
+  inner_join(., pexel_filtered_1TPM, by="seqnames", suffix=c("_signalP","_pexel")) %>% 
+  arrange(desc(score)) %>% 
+  mutate(distance_SP_pexel=end_pexel-end_signalP) %>% 
+  select(seqnames, gene_id, gene_name, 
+         distance_SP_pexel,
+         score,
+         matches("start|end"), 
+         everything())
+```
+
 
 ```{r}
 apicoplast_ids <- unique(c(apicoplast_genes$gene_id, apicoTP_update$gene_id))
