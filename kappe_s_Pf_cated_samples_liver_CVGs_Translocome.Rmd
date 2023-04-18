@@ -35,7 +35,7 @@ library(edgeR)
 
 library(SummarizedExperiment)
 library(patchwork)
-library(maSigPro)
+# library(maSigPro)
 library(svglite)
 suppressPackageStartupMessages(library(mclust))
 
@@ -759,7 +759,7 @@ cvgs %>%
 ```
 
 ```{r}
-missing <- setdiff(cvgs$gene_id, rownames(cvg_expn))
+missing <- dplyr::setdiff(cvgs$gene_id, rownames(cvg_expn))
 # length(missing)
 
 missing_raw_counts <- counts %>% 
@@ -906,7 +906,6 @@ dim(pexel_genes) #1,437   11
 ```{r}
 # For comparison 
 nc_pexel_motifs <- tabulizer::extract_tables("references/PEXEL/mmi13024_supplemental_table2.pdf")
-
 
 nc_pexel_motifs_clean <- purrr::map(nc_pexel_motifs, function(x){
   df <- as.data.frame(x) 
@@ -1173,8 +1172,6 @@ ggplot(summary_ptex_expn, aes(x=time_point, y=median, group=gene_id)) +
 
 ### PEXEL Gene Expression
 
-pexel_hits_all
-
 ```{r}
 pexel_genes_ided <- pexel_hits_bool$gene_id[pexel_hits_bool$any_pexel_domain]
 # length(pexel_genes_ided)
@@ -1252,7 +1249,7 @@ pexel_summary_stats
 ```
 
 
-#### Expression threshold
+#### Canonical PEXELs Expression threshold
 
 ```{r}
 pexel_expn_threshold_1TPM <- pexel_summary_stats %>% 
@@ -1268,14 +1265,13 @@ pexel_expn_threshold_1TPM <- pexel_summary_stats %>%
          gene_id:position_canonical_RLEDQ,
          matches("Day[0-9]_number_samples_expressing"),
          seqnames:strand, description) 
-  # select(aa_name, gene_name:gene_id, passed_threshold, 
-  #        n_matches_canonical_RLEDQ:position_canonical_RLEDQ)
 
 dim(pexel_expn_threshold_1TPM)
 table(pexel_expn_threshold_1TPM$passed_threshold)
 #  No Yes 
 # 302 380 
 ```
+
 ```{r fig.height=20, fig.width=12}
 # pexel_expn
 canon_gene_ids <- pexel_hits_bool$gene_id[pexel_hits_bool$has_pexel_domain_canon_RLEDQ]
@@ -1324,7 +1320,6 @@ Heatmap(matrix = mat,
         row_names_gp = gpar(fontsize = 2))
 # dev.off()
 ```
-
 
 ```{r}
 pexel_filtered_1TPM <- pexel_expn_threshold_1TPM %>% 
@@ -1377,14 +1372,16 @@ Columns:
 ```{r}
 signalp_res <- read.delim("cvgs_pexel_domains/signalp6.0/prediction_results.txt", sep='\t', comment.char = "#", header = FALSE) %>% 
   rename_all(~c("id","prediction_type","prob_other","prob_signal_pep","cleavage_site_position")) %>% 
-  arrange(desc(prob_signal_pep))
+  arrange(desc(prob_signal_pep)) %>% 
+  mutate(gene_id=gsub("\\.[0-9]-p[0-9]$","", id)) %>% 
+  left_join(.,select(PF3D7_gene_annots,gene_id, gene_name, description), by="gene_id")
 
 signalp_res %>% head()
+# write.csv(signalp_res,"cvgs_pexel_domains/signalp6.0/prediction_results_annotated.csv", row.names = FALSE)
 ```
 
 `output.gff3`
 The start and end positions of all predicted signal peptides in GFF3 format.
-
 
 ```{r}
 signalp_gtf <- rtracklayer::import("cvgs_pexel_domains/signalp6.0/output.gff3") %>% 
@@ -1421,28 +1418,31 @@ known_exported %>%
 
 # Integrate SignalP and TM domains
 
+### Canonical 
+
 ```{r}
 signalp_pexel_results <- signalp_gtf %>% 
+  select(-gene_id, -gene_name) %>% 
   inner_join(., pexel_filtered_1TPM, by="seqnames", suffix=c("_signalP","_pexel")) %>% 
   arrange(desc(score)) %>% 
-  mutate(distance_SP_pexel=end_pexel-end_signalP) %>% 
-  select(seqnames, gene_id, gene_name, 
-         distance_SP_pexel,
-         score,
-         matches("start|end"), 
-         everything())
+  mutate(distance_SP_pexel=end_pexel-end_signalP) 
 
 subset_summary <- select(pexel_summary_stats, gene_id, matches("TPM")) %>% 
   filter(gene_id %in% signalp_pexel_results$gene_id) %>% 
   distinct()
 
 signalp_pexel_results <- signalp_pexel_results %>% 
-  left_join(., subset_summary, by="gene_id")
+  left_join(., subset_summary, by="gene_id") %>% 
+  select(seqnames, gene_id, gene_name, 
+         distance_SP_pexel,
+         score,
+         matches("start|end"), 
+         everything())
 
 dim(signalp_pexel_results)
 length(unique(signalp_pexel_results$gene_id)) #35 gene_ids
 
-# write.csv(signalp_pexel_results, "cvgs_pexel_domains/pexel_motif_hits_150aa_signalP_hits_100aa_expression_TPM.csv", row.names = FALSE)
+# write.csv(signalp_pexel_results, "cvgs_pexel_domains/canonical_pexel_motif_hits_150aa_signalP_hits_100aa_expression_TPM.csv", row.names = FALSE)
 ```
 
 
@@ -1478,6 +1478,8 @@ any_expressed_1TPM <- summary_expressed_1TPM %>%
 length(unique(any_expressed_1TPM$gene_name)) #4743
 ```
 
+## Canonical 
+
 ```{r}
 pexel_ids <- pexel_hits_bool$gene_id[pexel_hits_bool$has_pexel_domain_canon_RLEDQ] %>% unique()
 expn_1TPM_ids <- any_expressed_1TPM %>% pull(gene_name) %>% unique()
@@ -1488,7 +1490,7 @@ sapply(gene_lists, length)
 ```
 
 ```{r fig.height=7, fig.width=7, eval=FALSE}
-# svglite::svglite("figures/uncorrected/cvgs_pexel/pexel_signalP_expression_1TPM_venn.svg", height = 10, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+# svglite::svglite("figures/uncorrected/cvgs_pexel/canonical_pexel_signalP_expression_1TPM_venn.svg", height = 10, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 ggVennDiagram(gene_lists,
               label_alpha=0.2,
               label_geom = "label",
@@ -1504,10 +1506,7 @@ ggVennDiagram(gene_lists,
 # Share the Data 
 
 ```{bash}
-destination="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/"
-rsync -av --exclude .DS_Store cvgs_pexel_domains $destination
-rsync -av --exclude .DS_Store figures $destination 
-rsync -av --exclude .DS_Store presentations $destination 
+./rsync.sh
 ```
 
 

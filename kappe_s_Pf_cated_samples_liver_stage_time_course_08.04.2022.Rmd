@@ -656,7 +656,7 @@ create_motif_enr_plots <- function(enr_df,
   
   # Plot the median expression per bio-replicate of all genes in time-course as a ribbon
   # add another ribbon of the TF's expression over time. 
-  num <- length(unique(summary_stats$motif))
+  num <- length(unique(enr_df[[factor_column]]))
   time_ribbon <- ggplot(data=summary_stats,
          aes(x=analysis_factor_group,
              y=mean, 
@@ -667,7 +667,8 @@ create_motif_enr_plots <- function(enr_df,
                     fill=motif),
                 alpha=0.10) +
     geom_line(aes(x=analysis_factor_group, 
-                  y=middle_val, group=motif), 
+                  y=middle_val, 
+                  group=motif), 
               linetype="dashed",
               linewidth=0.5, alpha=0.5) +
     geom_point(aes(color=analysis_factor_group, shape=stat),
@@ -690,24 +691,24 @@ create_motif_enr_plots <- function(enr_df,
           panel.border = element_rect(fill = NA,colour = c("black")))
   
   # Plot the median expression per bio-replicate as a line plot
-  time_cluster <- ggplot(
-    data=expn_df_long,
+  time_cluster <- ggplot( data=expn_df_long,
          aes(x=analysis_factor_group,
-             y=median_val_per_sample, 
+             y=mean_val_per_sample, 
              color=analysis_factor_group, 
              group=analysis_factor_group)) +
-    geom_line(aes(x=analysis_factor_group, y=median_val, 
+    geom_line(aes(x=analysis_factor_group,
+                  y=mean_val, 
                   group=!!sym(factor_column)),
               size=0.5, color="black",
               alpha=0.75,
               linetype="longdash") +
-    geom_point(size=2) +
+    geom_point(size=2, alpha=0.7) +
     scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
     labs(y="log2 (CPM)", x="") +
     guides(color = guide_legend(title = "Time point")) +
     facet_wrap(~label,
                scales = 'fixed',
-               nrow=9, 
+               nrow=num,
                strip.position = "left") +
     theme_classic() +
     theme(
@@ -1398,10 +1399,12 @@ expn_d456 <- sigs_all_d456$sig.genes$sig.profiles  %>%
            factor(., levels=unique(.))) %>%
   ungroup() %>%
   group_by(gene_cluster_factor, analysis_factor_group) %>%
-  mutate(median_val=median(log2_CPM)) %>%
+  mutate(median_val=median(log2_CPM),
+         mean_val=mean(log2_CPM)) %>%
   ungroup() %>%
   group_by(gene_cluster_factor, analysis_factor_group, masigpro_id) %>%
-  mutate(median_val_per_sample=median(log2_CPM)) %>%
+  mutate(median_val_per_sample=median(log2_CPM),
+         mean_val_per_sample=mean(log2_CPM)) %>%
   ungroup()
 
 head(expn_d456)
@@ -2106,7 +2109,6 @@ input_withOrders <- input %>%
 
 ```
 
-
 ```{r}
 pf_ortho_geneids <- input %>% 
   group_by(gene_cluster) %>% 
@@ -2221,7 +2223,7 @@ tc_ortho_plots <- create_motif_enr_plots(enr_df = input,
                        motif_colors = motif_colors)
 ```
 
-```{r fig.height=10, fig.width=10}
+```{r fig.height=12, fig.width=10}
 layout_rows <- "
 ABC
 ABD
@@ -2234,10 +2236,13 @@ ABJ
 ABK
 "
 
-wdts <- c(0.5,1,0.75)
+wdts <- c(0.6,0.6,0.75)
 
 
-# svglite("figures/motif_analysis/time_point_cluster_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15,system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+# svglite("figures/motif_analysis/time_point_cluster_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=10,
+#         system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+
+svg("figures/motif_analysis/time_point_cluster_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=10)
 tc_ortho_plots$time_cluster + tc_ortho_plots$motif_enr + 
   tc_ortho_plots$top_logos$`cluster1:MA0502.2` +
   plot_spacer() + 
@@ -2249,11 +2254,12 @@ tc_ortho_plots$time_cluster + tc_ortho_plots$motif_enr +
   tc_ortho_plots$top_logos$`cluster9:MA1644.1` + 
   plot_spacer() +
   plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
-# dev.off()
+dev.off()
 ```
 
 ```{r fig.height=10, fig.width=10}
-# svglite("figures/motif_analysis/time_point_cluster_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+# svg("figures/motif_analysis/time_point_cluster_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=10)
+        # system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
 tc_ortho_plots$time_ribbon + tc_ortho_plots$motif_enr + 
   tc_ortho_plots$top_logos$`cluster1:MA0502.2` +
   plot_spacer() + 
@@ -2440,11 +2446,13 @@ profile_median_expn <- expn_d456 %>%
   left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
   
   group_by(gene_cluster_factor, masigpro_id) %>% 
-  mutate(median_val_per_sample=median(log2_CPM)) %>% 
+  mutate(median_val_per_sample=median(log2_CPM),
+         mean_val_per_sample=median(log2_CPM)) %>% 
   ungroup() %>% 
   
   group_by(gene_cluster_factor, analysis_factor_group) %>% 
-  mutate(median_val=median(log2_CPM)) %>% 
+  mutate(median_val=median(log2_CPM),
+         mean_val=mean(log2_CPM)) %>% 
   ungroup()
 ```
 
@@ -2477,10 +2485,10 @@ ABF
 ABG
 "
 
-wdts <- c(0.5,1,0.75)
+wdts <- c(0.6,0.6,0.75)
 
 
-# svglite("figures/motif_analysis/time_point_profiles_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 8, width=12,system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+# svg("figures/motif_analysis/time_point_profiles_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 8, width=8) 
 profile_ortho_plots$time_cluster + profile_ortho_plots$motif_enr + 
   profile_ortho_plots$top_logos$`Profile1:MA1644.1` +
   plot_spacer() + 
@@ -2492,7 +2500,9 @@ profile_ortho_plots$time_cluster + profile_ortho_plots$motif_enr +
 ```
 
 ```{r fig.height=5, fig.width=10}
-# svglite("figures/motif_analysis/time_point_profile_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 8, width=12, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+# svg("figures/motif_analysis/time_point_profile_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 8, width=10)
+# wdts <- c(0.75,0.6,0.75)
+
 profile_ortho_plots$time_ribbon +
   profile_ortho_plots$motif_enr +
   profile_ortho_plots$top_logos$`Profile1:MA1644.1` +
@@ -2738,7 +2748,7 @@ names(AP2_PWMlist) <- str_split_fixed(tf_dfs, pattern="/", n=3)[,3] %>%  gsub(".
 AP2_PWMlist
 ```
 
-```{r}
+```{r eval=FALSE}
 names(AP2_PWMlist) %>% 
   gsub("_D[0-9]|_DLD","",.) %>% 
   cat(., file="ap2_old_ids.txt", sep="\n")
@@ -3182,6 +3192,11 @@ dim(profile_hits_enr)
 #### Time course Clusters 
 
 ```{r}
+with_prom_bg <- read.csv("motif_analysis/monaLisa/time_course_ap2_results.csv")
+profiles_with_prom_bg <- read.csv("motif_analysis/monaLisa/time_course_profiles_ap2_results.csv")
+```
+
+```{r}
 sel_tc_hits <- with_prom_bg %>% 
   
   mutate(gene_cluster_factor=factor(gsub("cluster", "", gene_cluster), 
@@ -3231,18 +3246,17 @@ vals <- sel_tc_hits %>%
   pull(plot_fill, name=motif)
 
 clust_motifs <- hclust(dist(vals, method="euclidean"))
-plot(clust_motifs)
+# plot(clust_motifs)
 ```
 
 ```{r}
-order_motifs_profile <- c("PF13_0026") %>% 
+order_motifs <- c("PF13_0026") %>% 
   c(., clust_motifs$labels[clust_motifs$order][1:2]) %>% 
   c(.,  tail(clust_motifs$labels[clust_motifs$order], n=20)) %>% 
   unique()
 
-length(order_motifs_profile)
-table(unique(sel_tc_hits$motif) %in%  order_motifs_profile)
-# unique(sel_tc_hits$motif)[!unique(sel_tc_hits$motif) %in%  order_motifs_profile]
+length(order_motifs)
+table(unique(sel_tc_hits$motif) %in%  order_motifs)
 ```
 
 ```{r}
@@ -3320,9 +3334,33 @@ summary_stats <- expn_d456 %>%
   mutate(label=factor(label, levels=unique(label)))
 
 
-table(summary_stats$stat)
-table(summary_stats$motif)
-table(summary_stats$label)
+# table(summary_stats$stat)
+# table(summary_stats$motif)
+# table(summary_stats$label)
+```
+
+```{r}
+
+n <- length(unique(sel_tc_hits$motif))
+motif_colors <-  rep("grey50", 14) %>% 
+  set_names(unique(sel_tc_hits$motif))
+motif_colors[c("time-course cluster")] <- "green2"
+# 
+# barplot(rep(1,length(motif_colors)), col=motif_colors, names.arg = names(motif_colors), las=2, cex.names = 0.7)
+
+
+tc_AP2_plots <- create_motif_enr_plots(enr_df = sel_tc_hits,
+                       factor_column="gene_cluster_factor",
+                       motif_order =  order_motifs,
+                       summary_stats = summary_stats,
+                       expn_df_long = expn_d456,
+                       PWMlist = AP2_PWMlist,
+                       motif_colors = motif_colors)
+```
+
+
+```{r}
+tc_AP2_plots$time_ribbon
 ```
 
 
@@ -3475,22 +3513,29 @@ ABJ
 ABK
 "
 
-wdts <- c(0.5,1,0.75)
+wdts <- c(0.6,0.75,0.75)
 
 
 # svglite("figures/motif_analysis/time_point_cluster_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15,system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
-tc_time_cluster + tc_motif_enr + top_logos[[1]] +
-  top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
-  top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
+tc_AP2_plots$time_cluster + tc_AP2_plots$motif_enr + 
+  tc_AP2_plots$top_logos[[1]] +
+  tc_AP2_plots$top_logos[[2]] +
+  tc_AP2_plots$top_logos[[3]] +
+  tc_AP2_plots$top_logos[[4]] + 
+  tc_AP2_plots$top_logos[[5]] + 
+  tc_AP2_plots$top_logos[[6]] +
+  tc_AP2_plots$top_logos[[7]] + 
+  tc_AP2_plots$top_logos[[8]] + 
+  tc_AP2_plots$top_logos[[9]] +
   plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
 # dev.off()
 
 # svglite("figures/motif_analysis/time_point_cluster_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=15, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
-tc_time_ribbon + tc_motif_enr + top_logos[[1]] +
-  top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
-  top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
-  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
-# dev.off()
+# tc_time_ribbon + tc_motif_enr + top_logos[[1]] +
+#   top_logos[[2]] + top_logos[[3]] + top_logos[[4]] + top_logos[[5]] + 
+#   top_logos[[6]] + top_logos[[7]] + top_logos[[8]] + top_logos[[9]] +
+#   plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# # dev.off()
 ```
 
 
