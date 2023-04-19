@@ -696,7 +696,6 @@ conflicted::conflict_prefer("select","dplyr")
 conflicted::conflict_prefer("arrange","dplyr")
 conflicted::conflict_prefer("mutate","dplyr")
 ```
-
 ```{r}
 mito_genes <- PF3D7_gene_annots %>% 
   as.data.frame() %>% 
@@ -903,7 +902,7 @@ head(pexel_genes)
 dim(pexel_genes) #1,437   11
 ```
 
-```{r}
+```{r eval=FALSE}
 # For comparison 
 nc_pexel_motifs <- tabulizer::extract_tables("references/PEXEL/mmi13024_supplemental_table2.pdf")
 
@@ -1021,7 +1020,6 @@ pexel_hits_bool %>% head #5,318
 # table(pexel_hits_bool$any_pexel_domain) #2346
 table(pexel_hits_bool$has_pexel_domain_canon_RLEDQ) #669 genes
 ```
-
 
 ```{r}
 # pexel_hits_bool
@@ -1173,12 +1171,16 @@ ggplot(summary_ptex_expn, aes(x=time_point, y=median, group=gene_id)) +
 ### PEXEL Gene Expression
 
 ```{r}
+samples_include <- pf_samples %>% 
+  filter(!grepl("Day[02]", time_point))
+
+
 pexel_genes_ided <- pexel_hits_bool$gene_id[pexel_hits_bool$any_pexel_domain]
 # length(pexel_genes_ided)
 
 # non-log expression 
 include_pexel <- base::intersect(pexel_genes_ided, rownames(TPM))
-pexel_expn <- TPM[include_pexel,samples_include$sample_id_cat]
+pexel_expn <- TPM[include_pexel, samples_include$sample_id_cat]
 
 head(pexel_expn[,1:5])
 # dim(pexel_expn) #2346
@@ -1194,7 +1196,7 @@ pexel_expn_long <- pexel_expn %>%
   inner_join(., pf_samples, by="sample_id_cat") %>%
   select(gene_id:TPM, everything())
 
-head(pexel_expn_long)
+# head(pexel_expn_long)
 table(pexel_expn_long$analysis_factor_group)
 ```
 
@@ -1213,14 +1215,14 @@ pexel_hits_all_toAdd <- pexel_hits_all %>%
   mutate(gene_id=gsub(".[0-9].p[0-9]","", aa_name)) %>% 
   select(gene_id, aa_name, everything())
 
-head(pexel_hits_all_toAdd)
+# head(pexel_hits_all_toAdd)
 dim(pexel_hits_all_toAdd)
 table(pexel_hits_all_toAdd$n_matches_canonical_RLEDQ)
 ```
 
 ```{r}
 pexel_summary_stats <- pexel_expn_long %>% 
-  mutate(expression_boolean= TPM >= 1.0)  %>% 
+  mutate(expression_boolean = TPM >= 1.0)  %>% 
   group_by(time_point, gene_id) %>% 
   summarise(number_samples_expressing_GT1.0_TPM=sum(expression_boolean), 
          mean_TPM=mean(TPM), 
@@ -1339,6 +1341,41 @@ pexel_filtered_1TPM <- pexel_expn_threshold_1TPM %>%
 # pexel_filtered_1TPM
 ```
 
+### Non-Canonical 
+
+```{r}
+cols <- grep("n_matches_noncanonical", colnames(pexel_summary_stats), value = T)
+cols
+```
+
+```{r}
+pexel_noncanon_1TPM_dfs <- purrr::map(cols, function(x){
+  
+  motif <- str_split_fixed(x, "_", n=4)[,4]
+  
+  pexel_summary_stats %>% 
+    filter(!! as.name(x) > 0 ) %>% 
+    mutate(passed_threshold=case_when(
+      Day4_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+      Day5_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+      Day6_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+      TRUE ~ "No"
+    )) %>%
+    left_join(., PF3D7_gene_annots, by="gene_id") %>%
+    mutate(pexel_motif = motif) %>% 
+    select(pexel_motif, 
+           aa_name, gene_name, passed_threshold,
+           gene_id, matches(motif),
+           matches("Day[0-9]_number_samples_expressing"),
+           seqnames:strand, description, 
+           matches("Day[0-9]_S[0-9]_TPM"))
+})
+names(pexel_noncanon_1TPM_dfs) <- str_split_fixed(cols, "_", n=4)[,4]
+```
+
+
+
+
 
 # SignalP Results
 
@@ -1352,11 +1389,13 @@ known_exported <- read.csv("references/PEXEL/export proteins from PlasmoDB.csv")
   mutate(has_signal_pep=!grepl("N\\/A", signal_p_peptide))
 
 head(known_exported)
-table(known_exported$has_signal_pep)
+table(known_exported$has_signal_pep) %>% View()
 # FALSE  TRUE 
 #   257   165 
 
-table(duplicated(known_exported$gene_id))
+dim(known_exported)
+# table(duplicated(known_exported$gene_id))
+# length(unique(known_exported$gene_id))
 ```
 
 
@@ -1377,6 +1416,7 @@ signalp_res <- read.delim("cvgs_pexel_domains/signalp6.0/prediction_results.txt"
   left_join(.,select(PF3D7_gene_annots,gene_id, gene_name, description), by="gene_id")
 
 signalp_res %>% head()
+# length(unique(signalp_res$gene_id))
 # write.csv(signalp_res,"cvgs_pexel_domains/signalp6.0/prediction_results_annotated.csv", row.names = FALSE)
 ```
 
@@ -1399,19 +1439,23 @@ signalp_gtf %>% head() #597 seq
 # quantile(signalp_gtf$score)
 #        0%       25%       50%       75%      100% 
 # 0.5000094 0.8330923 0.9996170 0.9998040 1.0000316 
+length(unique(signalp_gtf$gene_id))
 ```
 
 ```{r}
-table(known_exported$gene_id %in% signalp_gtf$gene_id)
+# table(known_exported$gene_id %in% signalp_gtf$gene_id)
 # FALSE  TRUE 
 #   296   126
 
-table(known_exported$has_signal_pep)
+# table(known_exported$has_signal_pep)
 
 known_exported %>% 
   left_join(., signalp_gtf, by="gene_id", multiple='all') %>% 
+  mutate(source=as.character(source)) %>% 
   group_by(has_signal_pep, source) %>% 
-  dplyr::count()
+  dplyr::count() %>% 
+  ungroup() %>% 
+  mutate(source=ifelse(is.na(source), "plasmoDB", source)) %>% View()
 
 # 116/165*100 == 70% identified by signalP 6.0
 ```
@@ -1445,11 +1489,75 @@ length(unique(signalp_pexel_results$gene_id)) #35 gene_ids
 # write.csv(signalp_pexel_results, "cvgs_pexel_domains/canonical_pexel_motif_hits_150aa_signalP_hits_100aa_expression_TPM.csv", row.names = FALSE)
 ```
 
+### Non-canonical 
+
+```{r}
+# sapply(pexel_noncanon_1TPM_dfs, function(x) table(x[,grep("n_matches",colnames(x))]))
+
+
+t <- sapply(pexel_noncanon_1TPM_dfs, function(x) select(x, gene_id, passed_threshold) %>%  distinct() %>%  pull(passed_threshold) %>%  table() ) 
+colnames(t) <- names(pexel_noncanon_1TPM_dfs)
+t
+```
+
+```{r}
+noncanon_pexel_signalp <- purrr::map(pexel_noncanon_1TPM_dfs, function(df){
+  n <- max(df[,grep("n_matches",colnames(df))])
+  print(unique(df[["pexel_motif"]]))
+  
+  df <-   df %>% 
+    filter(passed_threshold == "Yes") %>% 
+    select(pexel_motif, 
+           aa_name,
+           gene_name,
+           gene_id, 
+           matches("position_noncanonical|match_noncanonical|n_matches_noncanonical"),
+           matches("TPM")) %>% 
+    separate(matches("position_noncanonical"), into=paste0("hit",1:n), sep="; ", remove = FALSE, fill = "right") %>% 
+    pivot_longer(., cols = matches("hit[0-9]"), names_to="number_pexel_hits", values_to = "position") %>% 
+    filter(!is.na(position)) %>% 
+    separate(position, into=c("start", "end"), sep="-") %>% 
+    mutate_at(vars(start,end), ~as.numeric(.)) %>% 
+    mutate(seqnames=aa_name)  %>% 
+    arrange(seqnames) %>% 
+    select(seqnames, start, end, everything(),
+           -number_pexel_hits)
+  
+  print(length(unique(df$gene_id)))
+  
+  signalp_pexel_results <- signalp_gtf %>%
+    select(-gene_id, -gene_name) %>%
+    inner_join(., df, by="seqnames", suffix=c("_signalP","_pexel")) %>%
+    arrange(desc(score)) %>%
+    mutate(distance_SP_pexel=end_pexel-end_signalP) %>%
+    select(pexel_motif, seqnames, gene_id, gene_name,
+         distance_SP_pexel,
+         score,
+         matches("start|end"),
+         everything())
+      
+})
+names(noncanon_pexel_signalp) <- names(pexel_noncanon_1TPM_dfs)
+```
+
+```{r}
+# lapply(noncanon_pexel_signalp, head)
+
+sapply(noncanon_pexel_signalp, function(x) length(unique(x$gene_id))) %>% 
+  set_names(., names(noncanon_pexel_signalp))
+```
+
+```{r}
+# lapply(names(noncanon_pexel_signalp), function(x) write.csv(noncanon_pexel_signalp[[x]],
+#   glue::glue("cvgs_pexel_domains/noncanonical_pexel_motif_{x}_hits_150aa_signalP_hits_100aa_expression_TPM.csv"), row.names = FALSE))
+```
+
 
 # Venn Diagram
 
 ```{r}
 library(ggVennDiagram)
+library(eulerr)
 ```
 
 ```{r}
@@ -1483,7 +1591,7 @@ length(unique(any_expressed_1TPM$gene_name)) #4743
 ```{r}
 pexel_ids <- pexel_hits_bool$gene_id[pexel_hits_bool$has_pexel_domain_canon_RLEDQ] %>% unique()
 expn_1TPM_ids <- any_expressed_1TPM %>% pull(gene_name) %>% unique()
-signal_p_ids <- signalp_gtf$gene_id
+signal_p_ids <- signalp_gtf$gene_id %>% unique()
 
 gene_lists <- list(pexel_ids=pexel_ids, expn_1TPM_ids=expn_1TPM_ids, signal_p_ids=signal_p_ids)
 sapply(gene_lists, length)
@@ -1502,6 +1610,18 @@ ggVennDiagram(gene_lists,
 # dev.off()
 ```
 
+```{r}
+fit <- euler(gene_lists, shape = "circle")
+
+fit$diagError
+fit$stress
+
+# svg("figures/uncorrected/cvgs_pexel/canonical_pexel_signalP_expression_1TPM_euler.svg", height = 5, width = 5)
+plot(fit, labels = TRUE, quantities = TRUE,
+     main = "canonical pexel motif genes", 
+     fills = RColorBrewer::brewer.pal(3,"Blues"))
+# dev.off()
+```
 
 # Share the Data 
 
