@@ -873,7 +873,7 @@ cb_eset
 
 ## DE Analysis
 
-```{r}
+```{r eval=FALSE}
 grps <- levels(pf_combat_dge$samples$analysis_factor_group)[-1]
 ref <- levels(pf_combat_dge$samples$analysis_factor_group)[1]
 
@@ -891,9 +891,10 @@ combat_de <- purrr::map(grps, function(grp){
 
 })
 names(combat_de) <- grps
+# saveRDS(combat_de,"DEGs/kappe_sHeps_Pf_vs_sporozorite_combat-seq_corrected_DEGs_list.RDS")
 ```
 
-```{r}
+```{r eval=FALSE}
 save=FALSE
 statement <- "Differential expression analysis with limma voom comparing:"
 correction <- "counts corrected for batch effect: combat-seq"
@@ -1020,43 +1021,6 @@ volcano_plot <- function(eBayesFit, cut.off=2.5, label.offset=0.5){
 ```
 
 ```{r}
-
-species_genes %>% 
-  mutate(gene_order=factor(gene_id, levels=rownames(combat_de$Day2_Heps_Pf$eBayesFit$coefficients))) %>% 
-  select(gene_name, gene_id, gene_order) %>% 
-  filter(!is.na(gene_order)) %>% 
-  arrange(gene_order)
-```
-
-```{r}
-vp <- volcano_plot(combat_de$Day2_Heps_Pf$eBayesFit)
-
-```
-
-```{r}
-DEGs_full <- lapply(dir("DEGs", pattern="corrected_unfiltered_DEGs", full.names = TRUE),
-                    function(x) read.delim(x, sep=",",  comment.char = "#") %>% 
-                      left_join(., select(species_genes, gene_id, gene_name),
-                                by="gene_id"))
-names(DEGs_full) <- dir("DEGs", pattern="corrected_unfiltered_DEGs") %>%  gsub("kappe.+(Day[0-9])_.+", "\\1", .)
-
-head(DEGs_full$Day2)
-
-quantile(DEGs_full$Day2$adj.P.Val)
-quantile(DEGs_full$Day2$logFC)
-quantile(DEGs_full$Day2$t)
-```
-
-```{r}
-pal <- circlize::colorRamp2(c(-10,-6,-2, 0,2, 6, 10),
-                      c("deepskyblue4", "deepskyblue2", "deepskyblue","white", "red", "red2", "red4"),
-                      space="LAB")
-
-
-
-```
-
-```{r}
 ggvolcano_plot <- function(DEGs, jitter_width=0.4, jitter_height=0.4){
   colorPal <- colorRampPalette(c("deepskyblue4", "deepskyblue3", "deepskyblue2",
                                  "deepskyblue1","white","red1", "red2", "red3", "red4"))(n=299)
@@ -1091,8 +1055,6 @@ ggvolcano_plot <- function(DEGs, jitter_width=0.4, jitter_height=0.4){
                position = position_jitter(width = jitter_width, height = jitter_height),
                alpha=0.2, size=2) +
     scale_x_continuous(expand = c(0.25, 0.25)) +
-    # scale_color_distiller(type = "div", limit = limit) +
-
     scale_color_gradientn(colours = colorPal,
                           na.value = alpha("grey90",alpha = 0.05),
                           limit=limit) +
@@ -1103,14 +1065,51 @@ ggvolcano_plot <- function(DEGs, jitter_width=0.4, jitter_height=0.4){
                     point.padding = 0,
                     box.padding=0.1,
                     max.overlaps=20,
-                    size=2.5) +
-    theme_classic()
+                    size=4.5) +
+    theme_classic() +
+    theme(axis.title = element_text(size=16),
+          axis.text = element_text(size=16),
+          legend.text = element_text(size=16))
 }
 ```
+
+
+```{r}
+combat_de <- readRDS("DEGs/kappe_sHeps_Pf_vs_sporozorite_combat-seq_corrected_DEGs_list.RDS")
+```
+
+```{r}
+vp <- volcano_plot(combat_de$Day2_Heps_Pf$eBayesFit)
+vp$gg.volcano 
+```
+
+```{r}
+DEGs_full <- lapply(dir("DEGs", pattern="corrected_unfiltered_DEGs", full.names = TRUE),
+                    function(x) read.delim(x, sep=",",  comment.char = "#") %>% 
+                      left_join(., select(species_genes, gene_id, gene_name),
+                                by="gene_id"))
+names(DEGs_full) <- dir("DEGs", pattern="corrected_unfiltered_DEGs") %>%  gsub("kappe.+(Day[0-9])_.+", "\\1", .)
+
+head(DEGs_full$Day2)
+
+# quantile(DEGs_full$Day2$adj.P.Val)
+# quantile(DEGs_full$Day2$logFC)
+# quantile(DEGs_full$Day2$t)
+```
+
+```{r}
+pal <- circlize::colorRamp2(breaks = c(-10,-6,-2, 0,2, 6, 10),
+                            colors = c("deepskyblue4", "deepskyblue2", "deepskyblue",
+                                       "white", "red", "red2", "red4"),
+                            space="LAB")
+```
+
 
 ```{r}
 volcano_plots <- purrr::map(DEGs_full,ggvolcano_plot)
 # names(volcano_plots)
+
+# volcano_plots$Day2
 ```
 
 ```{r}

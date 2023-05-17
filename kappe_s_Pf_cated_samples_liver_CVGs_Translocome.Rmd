@@ -687,15 +687,13 @@ identical(as.character(t1),as.character(t2)) # TRUE
 identical(as.character(t1), as.character(t3))
 ```
 
-
-# Reference Data
-
 ```{r}
 conflicted::conflict_prefer("filter","dplyr")
 conflicted::conflict_prefer("select","dplyr")
 conflicted::conflict_prefer("arrange","dplyr")
 conflicted::conflict_prefer("mutate","dplyr")
 ```
+
 ```{r}
 mito_genes <- PF3D7_gene_annots %>% 
   as.data.frame() %>% 
@@ -703,6 +701,7 @@ mito_genes <- PF3D7_gene_annots %>%
 
 dim(mito_genes)
 ```
+
 
 # VAR Genes Expression
 
@@ -1117,19 +1116,30 @@ head(ptex_expn_long)
 ```{r fig.width=5, fig.height=3}
 labels <- c("PF3D7_1471100"="EXP2","PF3D7_1436300"="PTEX150", "PF3D7_1116800"="HSP101", "PF3D7_1345100"="TRX2", "PF3D7_1105600"="PTEX88")
 
+set.seed(202)
+
 # svg("figures/uncorrected/cvgs_pexel/PTEX_complex_genes_expression_boxplot.svg", height = 5, width = 10)
-ggplot(ptex_expn_long, aes(x=analysis_factor_group, y=log2TPM, fill=gene_id)) +
-  geom_boxplot(alpha=0.2, color="grey50") +
-  geom_point(aes(color=analysis_factor_group),
-             position = position_jitterdodge(jitter.width = 0.1),
+ggplot(ptex_expn_long, aes(x=gene_id, y=log2TPM, fill=gene_id)) +
+  geom_boxplot(alpha=0.75, color="grey60") +
+  facet_wrap(~analysis_factor_group) +
+  geom_point(
+             aes(color=analysis_factor_group),
+             position = position_jitterdodge(jitter.width = 0.25, jitter.height = 0),
              size=2, alpha=0.75) +
-  scale_color_viridis_d(begin=0,end=0.8,direction = -1) +
-  scale_fill_manual(values=ggpubr::get_palette("Blues", 5), 
-                    labels=labels) +
-  guides(fill = guide_legend(override.aes = list(size = 0, alpha=0.3) )) +
+  # scale_color_viridis_d(begin=0,end=0.8,direction = -1) +
+  scale_color_manual(values=ggpubr::get_palette("Blues", 4)[2:4]) +
+  scale_fill_viridis_d(begin=0,end=0.8,
+                        direction = -1,
+                        option = "A",
+                        labels=labels) +
+  scale_x_discrete(labels = labels) +
+  guides(fill = guide_legend(override.aes = list(size = 0, alpha=0.75) )) +
   labs(x="") +
-  theme_classic() 
+  theme_classic() +
+  theme(axis.text.x = element_text(angle=45, vjust=1, hjust=1))
 # dev.off()
+
+
 ```
 
 ```{r}
@@ -1389,7 +1399,7 @@ known_exported <- read.csv("references/PEXEL/export proteins from PlasmoDB.csv")
   mutate(has_signal_pep=!grepl("N\\/A", signal_p_peptide))
 
 head(known_exported)
-table(known_exported$has_signal_pep) %>% View()
+table(known_exported$has_signal_pep)
 # FALSE  TRUE 
 #   257   165 
 
@@ -1412,10 +1422,12 @@ Columns:
 signalp_res <- read.delim("cvgs_pexel_domains/signalp6.0/prediction_results.txt", sep='\t', comment.char = "#", header = FALSE) %>% 
   rename_all(~c("id","prediction_type","prob_other","prob_signal_pep","cleavage_site_position")) %>% 
   arrange(desc(prob_signal_pep)) %>% 
-  mutate(gene_id=gsub("\\.[0-9]-p[0-9]$","", id)) %>% 
+  mutate(gene_id=gsub("\\.[0-9]-p[0-9]$","", id), 
+         transcript_id=gsub("-p[0-9]$","", id)) %>% 
   left_join(.,select(PF3D7_gene_annots,gene_id, gene_name, description), by="gene_id")
 
 signalp_res %>% head()
+dim(signalp_res)
 # length(unique(signalp_res$gene_id))
 # write.csv(signalp_res,"cvgs_pexel_domains/signalp6.0/prediction_results_annotated.csv", row.names = FALSE)
 ```
@@ -1449,15 +1461,34 @@ length(unique(signalp_gtf$gene_id))
 
 # table(known_exported$has_signal_pep)
 
-known_exported %>% 
+comparison_signalP <- known_exported %>% 
   left_join(., signalp_gtf, by="gene_id", multiple='all') %>% 
-  mutate(source=as.character(source)) %>% 
+  mutate(source=as.character(source)) 
+
+
+comparison_signalP %>% 
   group_by(has_signal_pep, source) %>% 
   dplyr::count() %>% 
   ungroup() %>% 
-  mutate(source=ifelse(is.na(source), "plasmoDB", source)) %>% View()
+  mutate(source=ifelse(is.na(source), "plasmoDB", source)) 
+# %>% View()
 
 # 116/165*100 == 70% identified by signalP 6.0
+
+diff <- comparison_signalP %>% 
+  filter(has_signal_pep, 
+         is.na(source)) %>% 
+  rename_at(vars(signal_p_peptide:has_signal_pep),
+            ~paste0(.,"_signalPv3.0")) %>% 
+  left_join(., select(signalp_res, id, transcript_id, prediction_type:cleavage_site_position) %>% 
+              rename_at(vars(prediction_type:cleavage_site_position), ~paste0(.,"_signalPv6.0")),
+            by=c("source_id"="transcript_id")) %>% 
+  arrange(desc(prob_signal_pep_signalPv6.0)) %>% 
+  select(gene_id:has_signal_pep_signalPv3.0, 
+         id:cleavage_site_position_signalPv6.0)
+
+# diff
+# write.csv(diff,"cvgs_pexel_domains/PF3D7_signalPv3.0_vs_signalPv6.0.csv", row.names = F)
 ```
 
 # Integrate SignalP and TM domains
@@ -1490,15 +1521,6 @@ length(unique(signalp_pexel_results$gene_id)) #35 gene_ids
 ```
 
 ### Non-canonical 
-
-```{r}
-# sapply(pexel_noncanon_1TPM_dfs, function(x) table(x[,grep("n_matches",colnames(x))]))
-
-
-t <- sapply(pexel_noncanon_1TPM_dfs, function(x) select(x, gene_id, passed_threshold) %>%  distinct() %>%  pull(passed_threshold) %>%  table() ) 
-colnames(t) <- names(pexel_noncanon_1TPM_dfs)
-t
-```
 
 ```{r}
 noncanon_pexel_signalp <- purrr::map(pexel_noncanon_1TPM_dfs, function(df){
@@ -1600,12 +1622,13 @@ sapply(gene_lists, length)
 ```{r fig.height=7, fig.width=7, eval=FALSE}
 # svglite::svglite("figures/uncorrected/cvgs_pexel/canonical_pexel_signalP_expression_1TPM_venn.svg", height = 10, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 ggVennDiagram(gene_lists,
-              label_alpha=0.2,
+              label_alpha=0.75,
               label_geom = "label",
               set_size=3, 
-              label_size=6) + 
+              label_size=7) + 
   scale_color_manual(values=c(viridis::mako(n = 3, end = 0.8))) +
-  scale_fill_gradient(low="aliceblue", high = "deepskyblue3", 
+  # scale_fill_gradient()
+  scale_fill_gradient(low = "deepskyblue3", high =  "aliceblue",
                       name="Number of Genes")
 # dev.off()
 ```
