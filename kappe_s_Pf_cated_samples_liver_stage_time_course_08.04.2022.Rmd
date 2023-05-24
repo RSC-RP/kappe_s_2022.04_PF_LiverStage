@@ -38,14 +38,6 @@ suppressPackageStartupMessages(library(mclust))
 ```
 
 ```{r}
-conflicted::conflict_prefer("filter","dplyr")
-conflicted::conflict_prefer("select","dplyr")
-conflicted::conflict_prefer("arrange","dplyr")
-conflicted::conflict_prefer("mutate","dplyr")
-```
-
-
-```{r}
 #https://www.tidyverse.org/blog/2021/02/svglite-2-0-0/
 # system_fonts = list(sans = "Open Sans")
 # systemfonts::system_fonts()
@@ -354,7 +346,7 @@ create_annots_hmap <- function(expn, pheno_df, cols,
       goi.idx <- grep(regex, rownames(expn))
       labels <- rownames(expn)[goi.idx] #needs to be numeric indexes for complexheatmap
       #create the row (gene) labels object
-      labs <- circlize::rowAnnotation(link = anno_mark(at=goi.idx,
+      labs <- ComplexHeatmap::rowAnnotation(link = anno_mark(at=goi.idx,
                                              labels=labels,
                                              which="row",
                                              link_width=unit(1, "mm")),
@@ -481,7 +473,8 @@ create_pf_heatmaps <- function(TMMCPM,sample_annots, gene_annots,
                                ntop=1000,order_ids=NULL,
                                genelist=NULL,
                                split=NULL,
-                               heatmap_colors=NULL){
+                               heatmap_colors=NULL,
+                               GOI=NULL){
   pf_genes <- gene_annots %>% 
     as.data.frame() %>% 
     dplyr::filter(genome=="PF3D7") %>% 
@@ -502,6 +495,7 @@ create_pf_heatmaps <- function(TMMCPM,sample_annots, gene_annots,
                                       pheno_df = sample_annots,
                                       cc=NULL,
                                       colorbar.height=2,
+                                      goi = GOI,
                                       cols = c("analysis_factor_group"))
   
   name <- ifelse(center_scale, "z-scores","log2_CPM")
@@ -515,7 +509,7 @@ create_pf_heatmaps <- function(TMMCPM,sample_annots, gene_annots,
                split=split,
                show_sample_ids=TRUE)
   
-  return(list("dends"=dends,"heatmap"=res))
+  return(list("dends"=dends,"heatmap"=res, "hmap_anno"=hmap_anno_obj))
   
 }
 ```
@@ -683,10 +677,12 @@ create_motif_enr_plots <- function(enr_df,
     scale_fill_manual(values=motif_colors) +
     theme_classic() +
     guides(color = guide_legend(title = "Time point")) +
-    theme(
-          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
-          axis.text.y = element_text(color="black"),
+    theme(legend.text = element_text(size=14),
+          axis.text.x = element_text(size=18, angle=15, vjust=1, hjust=1,color="black"),
+          axis.text.y = element_text(size=18, color="black"),
+          axis.title.y = element_text(size=18, color="black"),
           axis.title.x = element_blank(),
+          strip.text = element_text(size=24),
           plot.margin = margin(l=5, unit="mm"), 
           strip.placement = "outside", 
           panel.border = element_rect(fill = NA,colour = c("black")))
@@ -712,9 +708,12 @@ create_motif_enr_plots <- function(enr_df,
                nrow=num,
                strip.position = "left") +
     theme_classic() +
-    theme(
-          axis.text.x = element_text(angle=15, vjust=1, hjust=1,color="black"),
+    theme(legend.text = element_text(size=14),
+          axis.text.x = element_text(size=18,angle=15, vjust=1, hjust=1,color="black"),
           axis.title.x = element_blank(),
+          axis.text.y = element_text(size=18, color="black"),
+          axis.title.y = element_text(size=18, color="black"),
+          strip.text = element_text(size=20),
           plot.margin = margin(l=5, unit="mm"), 
           strip.placement = "outside", 
           panel.border = element_rect(fill = NA,colour = c("black")))
@@ -749,8 +748,9 @@ create_motif_enr_plots <- function(enr_df,
       labs(y="",x="") +
       theme_classic() +
       theme(axis.text = element_text(color="black"),
-            axis.text.y = element_text(angle=90,hjust = 0.5),
-            axis.text.x = element_text(angle=20, vjust=1, hjust=1))
+            legend.text = element_text(size=14),
+            axis.text.y = element_text(size=20, angle=90,hjust = 0.5),
+            axis.text.x = element_text(size=16, angle=45, vjust=1, hjust=1))
   
   clust_labs <- enr_df %>% pull(label, name=!!sym(factor_column))
   incl_hits <- enr_df %>% 
@@ -773,8 +773,8 @@ create_motif_enr_plots <- function(enr_df,
       suppressMessages(scale_x_continuous(expand = c(0,0), 
                          limits = lims,
                          breaks= breaks)) +
-      theme(plot.title = element_text(size=10,vjust = 0.5, hjust = 0.5),
-            axis.text = element_text(size=10),
+      theme(plot.title = element_text(size=20,vjust = 0.5, hjust = 0.5),
+            axis.text = element_text(size=20),
             plot.margin = margin())
   })
   
@@ -913,7 +913,13 @@ dim(ap2_ids)
 ```
 
 
-
+```{r}
+conflicted::conflict_prefer("filter","dplyr")
+conflicted::conflict_prefer("select","dplyr")
+conflicted::conflict_prefer("arrange","dplyr")
+conflicted::conflict_prefer("mutate","dplyr")
+conflicted::conflict_prefer("intersect","base")
+```
 
 # TrendCatcher
 
@@ -1461,12 +1467,16 @@ ggplot(data=expn_d456,
 ```
 
 ```{r fig.height=10, fig.width=5}
-# pdf("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_expression_boxplot_d456.pdf", height = 10, width = 14)
-# 
-# svglite("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_expression_boxplot_d456.svg",fix_text_size=FALSE,
-#         system_fonts = list(sans = "Open Sans"), height = 14, width = 7)
+# png("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_expression_boxplot_d456.png", height = 14, width = 10, units = "in", res = 150)
 
-ggplot(data=expn_d456,
+
+sample_labels <- c("sporozorite"="sporozoites", 
+                   "Day2_Heps_Pf"="Day2_Pf_LS",
+                   "Day4_Heps_Pf"="Day4_Pf_LS",
+                   "Day5_Heps_Pf"="Day5_Pf_LS",
+                   "Day6_Heps_Pf"="Day6_Pf_LS" )
+
+boxplots <- ggplot(data=expn_d456,
        aes(x=analysis_factor_group, y=log2_CPM, fill=analysis_factor_group)) +
   geom_point(aes(color=analysis_factor_group),
              position = position_jitterdodge(jitter.width = 2),
@@ -1475,14 +1485,17 @@ ggplot(data=expn_d456,
   geom_line(aes(x=analysis_factor_group, y=median_val, group=gene_cluster_factor), 
             size=1.5, color="black", alpha=0.75,
             linetype="solid") +
-  scale_color_viridis_d(option="D", begin=0.2, end=0.9) +
-  scale_fill_viridis_d(option="D") +
+  scale_x_discrete(labels = sample_labels) +
+  scale_color_viridis_d(option="D", begin=0.2, end=0.9, labels = sample_labels) +
+  scale_fill_viridis_d(option="D", labels = sample_labels) +
   theme_classic() +
   facet_wrap(~label, scales = "free_x", ncol=2) +
   theme(axis.text.x = element_text(angle=35, vjust=1, hjust=1,color="black"),
         axis.title.x = element_blank(),
         plot.margin = margin(l=5, unit="mm"))
 
+# svglite("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_expression_boxplot_d456.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 14, width = 7)
+boxplots
 # dev.off()
 ```
 
@@ -1521,31 +1534,47 @@ ggplot(data=expn_d456,
 ```{r eval=FALSE}
 gene_clust_df <- sigs_all_df_d456 %>% 
   select(gene_id,cluster=gene_cluster_factor) %>% 
-  # mutate(cluster=as.factor(cluster)) %>% 
   column_to_rownames("gene_id")
 
-row_ha <- circlize::rowAnnotation(df = gene_clust_df, 
+row_ha <- ComplexHeatmap::rowAnnotation(df = gene_clust_df, 
                         col = list(cluster=ggpubr::get_palette("jco", 9) %>% 
                                      set_names(levels(gene_clust_df$cluster))))
 
 expn_mat <- sigs_all_d456$sig.genes$sig.profiles[rownames(gene_clust_df),]
+colnames(expn_mat) <- gsub("Pf_Day0","sporozoites",colnames(expn_mat)) %>% 
+  gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2", .)
 
-
-new_pal <- colorRamp2(c(-4,-2, 0, 2, 4),
+new_pal <- circlize::colorRamp2(c(-4,-2, 0, 2, 4),
                       c("deepskyblue3", "deepskyblue","white", "red", "red3"),
                       space="sRGB")
+
+
+
+sample_anno <- design_input %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), levels= c("sporozoites",
+                                                                                      "Day2_Pf_LS",
+                                                                                      "Day4_Pf_LS",
+                                                                                      "Day5_Pf_LS",
+                                                                                      "Day6_Pf_LS"))) %>% 
+  set_rownames(.$masigpro_id) %>% 
+  as.data.frame()
+
+# head(expn_mat)
+# head(sample_anno)
+# all(colnames(expn_mat) %in% rownames(sample_anno))
+
 hmap_time_course <- 
   create_pf_heatmaps(TMMCPM = expn_mat,
-                     sample_annots = design_input,
+                     sample_annots = sample_anno,
                      gene_annots = rowData(cb_se),
                      genelist = rownames(gene_clust_df),
                      split = gene_clust_df)
 ```
 
 
-```{r fig.height=10, fig.width=7 eval=FALSE}
-# pdf("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_heatmap_d456.pdf",
-#     height = 10, width = 10)
+```{r fig.height=10, fig.width=7, eval=FALSE}
+# pdf("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_heatmap_d456.pdf",    height = 10, width = 10)
 hmap_time_course$heatmap + row_ha
 # dev.off()
 ```
@@ -1553,11 +1582,15 @@ hmap_time_course$heatmap + row_ha
 ```{r eval=FALSE}
 plot(hmap_time_course$dends$samp.c1)
  
-sample_order <- sigs_all_d456$sig.genes$sig.profiles %>% 
-  dplyr::select(Pf_Day0_Rep1:Pf_Day0_Rep5, 
-                Pf_Day4_Rep2,Pf_Day4_Rep1,Pf_Day4_Rep3,
-                Pf_Day5_Rep2,Pf_Day5_Rep3,Pf_Day5_Rep1,
-                Pf_Day6_Rep1, Pf_Day6_Rep2, Pf_Day6_Rep3)  %>% 
+sample_order <- expn_mat %>% 
+  # dplyr::select(Pf_Day0_Rep1:Pf_Day0_Rep5, 
+  #               Pf_Day4_Rep2,Pf_Day4_Rep1,Pf_Day4_Rep3,
+  #               Pf_Day5_Rep2,Pf_Day5_Rep3,Pf_Day5_Rep1,
+  #               Pf_Day6_Rep1, Pf_Day6_Rep2, Pf_Day6_Rep3)  %>% 
+    dplyr::select(sporozoites_Rep1:sporozoites_Rep5, 
+                Day4_Pf_LS_Rep2,Day4_Pf_LS_Rep1,Day4_Pf_LS_Rep3,
+                Day5_Pf_LS_Rep2,Day5_Pf_LS_Rep3,Day5_Pf_LS_Rep1,
+                Day6_Pf_LS_Rep1, Day6_Pf_LS_Rep2, Day6_Pf_LS_Rep3)  %>% 
   colnames()
 
 # sample_order
@@ -1565,16 +1598,17 @@ sample_order <- sigs_all_d456$sig.genes$sig.profiles %>%
 hmap_time_course2 <- 
   create_pf_heatmaps(TMMCPM = expn_mat,
                      order_ids = sample_order,
-                     sample_annots = design_input,
+                     sample_annots = sample_anno,
                      gene_annots = rowData(cb_se),
-                     genelist = names(ordered_genes),
+                     genelist = rownames(gene_clust_df), #names(ordered_genes),
                      split = gene_clust_df)
 ```
 
-```{r fig.height=10, fig.width=7 eval=FALSE}
-# svglite("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_re-order_heatmap_d456.svg",
-#         system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE,
-#         height = 10, width = 10)
+```{r fig.height=12, fig.width=10, eval=FALSE}
+
+# png("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_re-order_heatmap_d456.png", height = 10, width = 10, units = "in", res = 150)
+
+# svglite("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_re-order_heatmap_d456.svg", system_fonts = list(sans = "Open Sans"), fix_text_size=FALSE,  height = 10, width = 10)
 
 hmap_time_course2$heatmap + row_ha
 
@@ -1604,13 +1638,10 @@ Group <- rep(1,12)
 ss.edesign <- cbind(Time,Replicates,Group)
 rownames(ss.edesign) <- paste("Array", c(1:12), sep = "")
 # ss.edesign
-```
 
-```{r}
-data(NBdata)
-quantile(NBdata)
-data(NBdesign)
- 
+# data(NBdata)
+# quantile(NBdata)
+# data(NBdesign)
 # View(NBdesign)
 ```
 
@@ -1666,6 +1697,929 @@ tc.DATA [sample(c(1:(300*36)), 300)] <- NA  # introduce missing values
 ```
 
 
+# GO Terms
+
+https://plasmodb.org/plasmo/app/search/transcript/GeneByLocusTag
+
+http://current.geneontology.org/products/pages/downloads.html
+
+-Panel C putative:
+Group for cluster trend:
+Profile 1 Highly expressed in SPZ down in LS ( Cluster 1 & 2),
+Profile 2 Highly expressed in SPZ reduced in LS (Cluster 3 and 8),
+Profile 3 expressed in SPZ upregulated in LS (Cluster 4 & 6),
+Profile 4 Increasing over LS development (Cluster 5 & Cluster 9),
+Profile 5 upregulated in mature LS forms (Cluster 7).
+
+
+* Evaluate if the new GO terms for this profiles increase significance and data interpretation. 
+
+
+```{r}
+day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
+                      sep=",",comment.char = "#")
+head(day2_de)
+# dim(day2_de) #1978   20
+
+time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
+  rename_at(vars(X), ~c("gene_id")) %>% 
+  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>% 
+  mutate(combined_gene_clusters=case_when(
+    grepl("1$|2$",gene_cluster) ~ "Profile1",
+    grepl("3$|8$", gene_cluster) ~ "Profile2",
+    grepl("4$|6$", gene_cluster) ~ "Profile3",
+    grepl("5$|9$", gene_cluster) ~ "Profile4",
+    grepl("7", gene_cluster) ~ "Profile5"
+  )) %>% 
+  dplyr::select(gene_id, matches("gene_cluster"), everything()) %>% 
+  arrange(gene_cluster)
+
+
+gene_clusts_dfs <- purrr::map(unique(time_course$gene_cluster), function(clust){
+  time_course %>%
+    dplyr::filter(gene_cluster==clust) 
+})
+names(gene_clusts_dfs) <- paste0("cluster", unique(time_course$gene_cluster))
+
+
+gene_clusts_combined_dfs <- purrr::map(unique(time_course$combined_gene_clusters), function(clust){
+  time_course %>%
+    dplyr::filter(combined_gene_clusters==clust) 
+}) %>% 
+  set_names(unique(time_course$combined_gene_clusters))
+
+# sapply(gene_clusts_dfs, dim)
+# head(gene_clusts_dfs$cluster1)
+# lapply(gene_clusts_dfs, function(x) quantile(x$betaTime))
+
+table(time_course$gene_cluster_factor,
+      time_course$combined_gene_clusters)
+```
+
+```{r}
+GO_descriptions <- GO_annots %>% 
+  dplyr::select(go_id, ontology, go_term_name) %>% 
+  distinct() %>% 
+  mutate_at(vars(ontology), ~gsub("\\s", "_", .))
+
+dim(GO_descriptions)
+# any(duplicated(GO_descriptions$go_id))
+GO_descriptions$ontology %>%  unique()
+```
+
+```{r}
+GO_annots_filtered <- GO_annots %>% 
+  group_by(ontology, go_id) %>% 
+  mutate(N=n()) %>% 
+  ungroup() %>% 
+  arrange(go_id) %>% 
+  filter(N>=5, N<=600) %>% 
+  select(gene_id, ontology, go_id, N)
+
+GO_annots_filtered
+# write.csv(GO_annots_filtered,"expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_filteredSetSizes_v58.txt", row.names = F)
+
+GO_annots_filtered %>% 
+  select(ontology, go_id) %>% 
+  distinct() %>% 
+  group_by(ontology) %>% 
+  dplyr::count()
+```
+
+
+## ClusterProfiler 
+
+```{r}
+library(clusterProfiler)
+```
+
+```{r}
+clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
+                                         label="go_term_name",Filter=TRUE){
+    
+    column <- glue::glue("Neg_log10_{pval_column}")
+    temp <- data.frame()
+    input <- df %>% 
+      dplyr::mutate( !!column := -log10(!!as.name(pval_column)))
+    
+    if(Filter){
+      temp <- input %>%
+        dplyr::filter( !!as.name(pval_column) < 0.05)
+    }
+    
+    if (nrow(temp) == 0){
+        temp <- input
+    }
+
+    n <- min(10,nrow(temp))
+    temp <- temp %>%
+      mutate(ID=factor(ID, levels = rev(ID))) %>%
+      dplyr::slice(1:n)
+
+    bubble_plot <- ggplot(temp,
+                          aes_string(x=column,
+                                     y="ID")) +
+      geom_point(aes(size=setSize, fill=ID), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(1,10)) +
+      labs(x=glue::glue("-log10({pval_column})"), y="") +
+      scale_y_discrete(expand = c(0.1,0)) +
+      scale_x_continuous(expand = c(0.15,0)) +
+      guides(fill="none",
+             size=guide_legend(title = "Number of Genes",
+                               size = 1)) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA),
+            plot.title = element_text(hjust = 0),
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) 
+
+
+    tab <-  ggplot(temp, aes_string(x = "0", y = "ID", 
+                             label=label, 
+                             color="ontology")) +
+        geom_text(size = 4,
+                  hjust = 0,
+                  nudge_x = 0)  +
+        scale_y_discrete(expand = c(0.1,0)) +
+        scale_color_manual(values=c("Biological_Process"="tomato","Cellular_Component"="forestgreen",
+                                    "Molecular_Function"="dodgerblue","N/A"="grey")) +
+        # scale_x_continuous(expand = c(0,1)) +
+        scale_x_continuous(expand = expansion(mult = c(0,0.01))) +
+        theme_void()
+
+    bubble_plot +
+      tab +
+      plot_layout(widths = c(1, 2.5), guides='collect') &
+      theme(legend.position='left')
+    
+}
+
+replace_long_strings <- function(string){
+  t <- string
+  if(grepl(",", t)){
+    at <- stringr::str_locate_all(t,",")[[1]][,"end"]
+  }else{
+    at <- stringr::str_locate_all(t," ")[[1]][,"end"]
+  }
+  at <- at[at <= 40][length(at[at <= 40])]
+  stringr::str_sub(t, start=at[1],end = at[1]) <- "\n"
+  t
+}
+```
+
+```{r}
+day2_go_clean <- read.csv("GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv") %>% 
+  mutate(Direction=ifelse(NES>0, "Enriched_Day2","Enriched_SPZ")) %>%
+  mutate(labels=case_when(
+    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1", go_term_name),
+    grepl("modulation", go_term_name) ~ gsub("^(.+) agg.+","\\1", go_term_name),
+    TRUE ~ go_term_name
+  )) %>%
+  dplyr::select(ID,ontology:go_term_name,
+                Direction,
+                pvalue, qvalues,
+                everything()) %>%
+  dplyr::arrange(qvalues)
+
+# day2_go_clean
+```
+
+```{r eval=FALSE}
+d2_gsea_input <- day2_de %>% 
+  pull(logFC, name=gene_id)
+
+
+cats <- unique(GO_annots$ontology)
+D2_GSEA_objs <- purrr::map(cats, function(x){
+  
+    input_go_cats <- GO_annots %>% 
+      dplyr::filter(ontology==x) %>%
+      dplyr::select(ID=go_id, gene=gene_id)
+    
+    GSEA_res <- GSEA(gene = d2_gsea_input,
+                      TERM2GENE = input_go_cats,
+                      minGSSize = 5,
+                      maxGSSize = 600)
+})
+names(D2_GSEA_objs) <- cats
+
+day2_go_clean <- purrr::map_dfr(D2_GSEA_objs, function(x) x@result) %>% 
+  left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
+  mutate(Direction=ifelse(NES>0, "Enriched_Day2","Enriched_SPZ")) %>% 
+  mutate(labels=case_when(
+    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1", go_term_name),
+    grepl("modulation", go_term_name) ~ gsub("^(.+) agg.+","\\1", go_term_name),
+    TRUE ~ go_term_name
+  )) %>% 
+  dplyr::select(ID,ontology:go_term_name,
+                Direction,
+                pvalue, qvalues,
+                everything()) %>% 
+  dplyr::arrange(qvalues)
+
+# day2_go_clean
+
+# day2_go_clean %>% filter(ontology == "Biological_Process")
+# table(day2_go_clean$Direction)
+# write.csv(day2_go_clean, "GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv", row.names = FALSE)
+```
+
+```{r}
+lab1 <- day2_go_clean %>% 
+  filter(ID=="GO:0006412") %>% 
+  mutate(label=paste(ID,go_term_name)) %>% 
+  pull(label)
+
+# svglite("figures/combat_seq/barcode_plots/day2_vs_spz_ClusterProfiler_GO0006412_barcode.svg",fix_text_size=FALSE, height = 5, width = 10, system_fonts = list(sans = "Open Sans"))
+bc1 <- gseaplot(D2_GSEA_objs$`Biological Process`, geneSetID = "GO:0006412", by="runningScore") +
+  labs(title=lab1)
+bc1
+# dev.off()
+ 
+lab2 <- day2_go_clean %>% 
+  filter(ID=="GO:0044409") %>% 
+  mutate(label=paste(ID,go_term_name)) %>% 
+  pull(label)
+
+# svglite("figures/combat_seq/barcode_plots/day2_vs_spz_ClusterProfiler_GO0044409_barcode.svg", fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 10)
+bc2 <- gseaplot(D2_GSEA_objs$`Biological Process`, geneSetID = "GO:0044409", by="runningScore") +
+  labs(title=lab2)
+bc2
+# dev.off()
+```
+
+```{r}
+layout <- "
+BCCC
+DDD#
+"
+
+d2_up <- day2_go_clean %>% 
+  filter(Direction == "Enriched_Day2") %>% 
+  clusterProfiler_bubble_plots(.,label = "labels")  +
+  labs(title = "GO Terms Enriched in Day 2")
+
+d2_down <- day2_go_clean %>%
+  filter(Direction == "Enriched_SPZ") %>%
+  clusterProfiler_bubble_plots(.,label = "labels") +
+  labs(title = "GO Terms Enriched in Sporozoite")
+
+# svglite("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_bubblePlot_barcode_Day2.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 7, width = 11.5)
+d2_up + bc1 + 
+  plot_layout(design = layout) 
+# dev.off()
+
+# svglite("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_bubblePlot_barcode_SPZ.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 7, width = 11.5)
+d2_down + bc2 + 
+  plot_layout(design = layout)
+# dev.off()
+```
+
+```{r}
+purrr::map(unique(day2_go_clean$ontology), function(ont, df){
+  df <- day2_go_clean %>% 
+    filter(ontology==ont)
+  
+  pdf(paste0("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_",ont,"_bubblePlot.pdf"), height = 5, width = 8)
+  print(clusterProfiler_bubble_plots(df))
+  dev.off()
+})
+```
+
+### Time-course clusters 
+
+```{r eval=FALSE}
+cluster_go <- purrr::map(names(gene_clusts_dfs), function(clust){
+  
+  gsea_input <- gene_clusts_dfs[[clust]] %>% 
+    pull(gene_id)
+  
+  cats <- unique(GO_annots$ontology)
+  go_enr_df <- purrr::map_dfr(cats, function(x){
+      input_go_cats <- GO_annots %>% 
+        dplyr::filter(ontology==x) %>%
+        dplyr::select(ID=go_id, gene=gene_id)
+      go_enr <- enricher(gene = gsea_input,
+                        TERM2GENE = input_go_cats,
+                        minGSSize = 5,
+                        maxGSSize = 600)
+      if(!is.null(go_enr)){
+        go_enr@result
+      }
+  })
+
+  go_enr_df <- go_enr_df %>%
+    mutate(cluster_number=clust) %>% 
+    left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
+    dplyr::select(ID,cluster_number, ontology:go_term_name,setSize=Count,
+           everything()) %>% 
+    dplyr::select(ID:go_term_name,pvalue,qvalue,
+                everything()) %>% 
+    dplyr::arrange(pvalue)
+
+  
+  return(go_enr_df)
+})
+
+names(cluster_go) <- names(gene_clusts_dfs)
+
+cluster_go_dfs <- bind_rows(cluster_go) 
+head(cluster_go_dfs, n=20)
+
+
+table(cluster_go_dfs$cluster_number)
+# write.csv(cluster_go_dfs, "GO_enrichment/time_course_clusters_clusterProfiler_allOntology.csv", row.names = FALSE)
+```
+
+```{r}
+cluster_go_dfs <-  read.csv("GO_enrichment/timecourse/time_course_clusters_clusterProfiler_allOntology.csv") %>% 
+  filter(qvalue < 0.2) %>% 
+  mutate(len=nchar(go_term_name)) %>% 
+  mutate(labels=case_when(
+    grepl("RNA polymerase", go_term_name) ~ gsub("RNA polymerase","RNApol",go_term_name),
+    grepl(".apurinic or apyrimidinic site.", go_term_name) ~ gsub(".apurinic or apyrimidinic site.","", go_term_name),
+    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1",go_term_name),
+    grepl("polyadenylation specificity factor complex", go_term_name) ~ gsub("polyadenylation specificity factor complex","CPSF", go_term_name),
+    grepl("calcium", go_term_name) ~ gsub("calcium-","Ca2+",go_term_name),
+    grepl("cellular protein", go_term_name) ~ gsub("cellular protein","", go_term_name),
+    grepl("-adenosylmethionine", go_term_name) ~ gsub("-adenosylmethionine","AMe",go_term_name),
+    TRUE ~ go_term_name
+  )) %>% 
+  dplyr::arrange(desc(len))
+```
+
+```{r}
+cluster_go_dfs %>% 
+  group_by(cluster_number) %>% 
+  mutate(FDR_sig_result=p.adjust < 0.2) %>% 
+  group_by(FDR_sig_result, .add=TRUE) %>% 
+  dplyr::count()  %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = FDR_sig_result,
+              values_from = n) %>% 
+  rename_at(c("FALSE","TRUE"), ~c("GO_terms_qvalue>0.2","GO_terms_qvalue<0.2"))  %>% 
+  left_join(., data.frame(Genes_in_Cluster=gene_clusts_dfs %>% 
+                            sapply(., nrow)) %>% 
+              rownames_to_column("cluster_number"), 
+            by="cluster_number") 
+ 
+# write.csv(.,"GO_enrichment/time_course_clusters_clusterProfiler_SigResults_Summary.csv", row.names = FALSE)
+```
+
+```{r}
+p <- purrr::map(unique(cluster_go_dfs$cluster_number), function(clust){
+  df <- cluster_go_dfs %>% 
+    filter(cluster_number == clust) %>% 
+    filter(ontology != "N/A", qvalue < 0.2) %>% 
+    mutate(setSize=as.integer(setSize)) %>% 
+    dplyr::arrange(pvalue)
+  
+    # svglite(paste0("figures/combat_seq/bubble_plots/",clust,"_ClusterProfiler_bubblePlot.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 8)
+    print(clusterProfiler_bubble_plots(df,pval_column = "pvalue",label = "labels", Filter=FALSE) +
+      plot_annotation(title = paste0("Timecourse Cluster ",clust)))
+    # dev.off()
+})
+```
+
+```{r}
+top_paths <- cluster_go_dfs %>% 
+   mutate(neg_log10_q=-log10(qvalue),
+          neg_log10_p=-log10(pvalue)) %>% 
+  group_by(cluster_number) %>% 
+  dplyr::filter( qvalue < 0.2 ) %>% 
+  # filter(p.adjust < 0.05 | pvalue < 0.05) %>% 
+  dplyr::arrange(desc(neg_log10_q), .by_group = TRUE) %>% 
+  dplyr::slice(1:10) %>% 
+  ungroup() %>% 
+  dplyr::filter(ontology != "N/A") %>% 
+  mutate(ID=factor(ID, levels=unique(ID)),
+         text_color=case_when(
+           ontology=="Cellular_Component" ~ "green4",
+           ontology=="Biological_Process" ~ "tomato2",
+           TRUE ~ "dodgerblue"
+         ), 
+         setSize_clean=ifelse(setSize > 20, 20, setSize))
+
+# dim(top_paths)
+head(top_paths)
+# table(duplicated(top_paths$ID))
+# table(top_paths$text_color)
+# table(top_paths$cluster_number)
+quantile(top_paths$setSize, probs = seq(0,1, length.out=11))
+```
+
+```{r fig.width=12, fig.height=6}
+ bubble_plot <- ggplot(top_paths, aes(x=neg_log10_p, y=ID)) +
+      geom_point(aes(size=setSize_clean, fill=ID), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(2,10), breaks = c(seq(0,20,by=4)),
+                   labels=seq(0,20,by=4) %>% gsub("20",">= 20", .)) +
+      labs(x="-log10(p-value)", y="") +
+      scale_y_discrete(expand = c(0.05,0.05)) +
+      scale_x_continuous(expand = c(0.05,0.05)) +
+  
+      theme(panel.grid.major.x = element_blank(),
+            axis.text.y = element_text(color=top_paths$text_color),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) +
+      guides(fill="none",
+             size=guide_legend(title = "Number of Genes",
+                               size = 1)
+             ) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA))
+
+
+# svglite("figures/combat_seq/bubble_plots/time_course_facet_plot_allOntology.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), width = 15, height = 7)
+bubble_plot +
+  facet_wrap(~cluster_number, scales = 'free', ncol = 5)
+# dev.off()
+```
+
+
+### Time point profiles
+
+```{r}
+cluster_go_combined_dfs <- read.csv("GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_allOntology.csv") %>% 
+    mutate(labels=case_when(
+    grepl("RNA polymerase", go_term_name) ~ gsub("RNA polymerase","RNApol",go_term_name),
+    grepl(".apurinic or apyrimidinic site.", go_term_name) ~ gsub(".apurinic or apyrimidinic site.","", go_term_name),
+    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1",go_term_name),
+    grepl("polyadenylation specificity factor complex", go_term_name) ~ gsub("polyadenylation specificity factor complex","CPSF", go_term_name),
+    grepl("calcium", go_term_name) ~ gsub("calcium-","Ca2+",go_term_name),
+    grepl("cellular protein", go_term_name) ~ gsub("cellular protein","", go_term_name),
+    grepl("-adenosylmethionine", go_term_name) ~ gsub("-adenosylmethionine","AMe",go_term_name),
+    grepl("complex$", go_term_name) ~ gsub("complex$", "", go_term_name),
+    TRUE ~ go_term_name
+  )) 
+
+cluster_go_combined_dfs
+```
+
+```{r eval=FALSE}
+cluster_go_combined <- purrr::map(names(gene_clusts_combined_dfs), function(clust){
+  
+  gsea_input <- gene_clusts_combined_dfs[[clust]] %>% 
+    pull(gene_id)
+  
+  cats <- unique(GO_annots$ontology)
+  go_enr_df <- purrr::map_dfr(cats, function(x){
+      input_go_cats <- GO_annots %>% 
+        dplyr::filter(ontology==x) %>%
+        dplyr::select(ID=go_id, gene=gene_id)
+      go_enr <- enricher(gene = gsea_input,
+                        TERM2GENE = input_go_cats,
+                        minGSSize = 5,
+                        maxGSSize = 600)
+      if(!is.null(go_enr)){
+        go_enr@result
+      }
+  })
+
+  go_enr_df <- go_enr_df %>%
+    mutate(cluster_number=clust) %>% 
+    left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
+    dplyr::select(ID,cluster_number, ontology:go_term_name,setSize=Count,
+           everything()) %>% 
+    dplyr::select(ID:go_term_name,pvalue,qvalue,
+                everything()) %>% 
+    dplyr::arrange(pvalue)
+
+  
+  return(go_enr_df)
+})
+
+names(cluster_go_combined) <- names(gene_clusts_combined_dfs)
+
+cluster_go_combined_dfs <- bind_rows(cluster_go_combined) %>% 
+  filter(qvalue < 0.2) %>% 
+  mutate(len=nchar(go_term_name)) %>% 
+  mutate(labels=case_when(
+    grepl("RNA polymerase", go_term_name) ~ gsub("RNA polymerase","RNApol",go_term_name),
+    grepl(".apurinic or apyrimidinic site.", go_term_name) ~ gsub(".apurinic or apyrimidinic site.","", go_term_name),
+    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1",go_term_name),
+    grepl("polyadenylation specificity factor complex", go_term_name) ~ gsub("polyadenylation specificity factor complex","CPSF", go_term_name),
+    grepl("calcium", go_term_name) ~ gsub("calcium-","Ca2+",go_term_name),
+    grepl("cellular protein", go_term_name) ~ gsub("cellular protein","", go_term_name),
+    grepl("-adenosylmethionine", go_term_name) ~ gsub("-adenosylmethionine","AMe",go_term_name),
+    grepl("complex$", go_term_name) ~ gsub("complex$", "", go_term_name)
+    TRUE ~ go_term_name
+  )) %>% 
+  dplyr::arrange(desc(len))
+
+# head(cluster_go_combined_dfs)
+
+# write.csv(cluster_go_combined_dfs, "GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_allOntology.csv", row.names = FALSE)
+```
+
+
+```{r}
+p <- purrr::map(unique(cluster_go_combined_dfs$cluster_number), function(clust){
+  df <- cluster_go_combined_dfs %>% 
+    filter(cluster_number == clust) %>% 
+    filter(ontology != "N/A", qvalue < 0.2) %>% 
+    mutate(setSize=as.integer(setSize)) %>% 
+    dplyr::arrange(pvalue)
+  
+    # svglite(paste0("figures/combat_seq/bubble_plots/",clust,"_ClusterProfiler_bubblePlot.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 8)
+    print(clusterProfiler_bubble_plots(df,pval_column = "pvalue",label = "labels", Filter=FALSE) +
+      plot_annotation(title = paste0("Timecourse Cluster ",clust)))
+    # dev.off()
+})
+names(p) <- unique(cluster_go_combined_dfs$cluster_number)
+```
+
+```{r}
+top_paths_profiles <- cluster_go_combined_dfs %>% 
+   mutate(neg_log10_q=-log10(qvalue),
+          neg_log10_p=-log10(pvalue)) %>% 
+  
+  group_by(cluster_number) %>% 
+  dplyr::filter( qvalue < 0.2 ) %>% 
+  dplyr::arrange(desc(neg_log10_p), .by_group = TRUE) %>% 
+  dplyr::slice(1:10) %>% 
+  mutate(x_pos = max(neg_log10_p)+0.5) %>% 
+  ungroup() %>% 
+  
+  dplyr::filter(ontology != "N/A") %>% 
+  mutate(GO_term=ID,
+         ID=paste(cluster_number, ID, sep="_")) %>% 
+  mutate(ID=factor(ID, levels = rev(unique(ID)) )) %>% 
+  arrange(desc(ID)) %>% 
+  mutate(text_color=case_when(
+           ontology=="Cellular_Component" ~ "green4",
+           ontology=="Biological_Process" ~ "tomato2",
+           TRUE ~ "dodgerblue"
+         ),
+         setSize_clean=ifelse(setSize > 25, 25, setSize))  %>% 
+  select(ID:ontology, text_color, labels,
+         x_pos,
+         neg_log10_p,
+         everything())
+  # arrange(cluster_number)
+
+# top_paths_profiles
+
+# levels(top_paths_profiles$ID) %>% length()
+range(top_paths_profiles$neg_log10_p)
+```
+
+```{r fig.width=12, fig.height=6}
+y_labs <- pull(top_paths_profiles, GO_term, name= ID)
+
+bubble_plot_profile <- ggplot(top_paths_profiles, aes(x=neg_log10_p, y=ID)) +
+      geom_point(aes(size=setSize_clean, fill=ID),
+                 shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(5,20), breaks = c(seq(0,25,by=5)),
+                   labels=seq(0,25,by=5) %>% gsub("25",">= 25", .) %>% gsub("^5$","<= 5", .)) +
+      labs(x="-log10(p-value)", y="") +
+
+      scale_y_discrete(expand = c(0.1,0.1), 
+                       labels = y_labs
+                       ) +
+      scale_x_continuous(expand = c(0.1,0.1),
+                         limits = c(0,11.8),
+                         breaks = seq(0,10, by=2)
+                         ) +
+      coord_cartesian(clip = 'off') +
+      # ggh4x::facet_grid2(~cluster_number, scales = "free", independent = "all", axes="all")
+      facet_wrap(~cluster_number, scales = 'free_y', ncol = 3) +
+      # ggh4x::facetted_pos_scales(x = list(
+      #           cluster_number %in%  paste0("Profile",c(1,3)) ~ scale_x_continuous(breaks = seq(1,12, by=2)),
+      #           cluster_number  %in%  paste0("Profile",c(2,4:5)) ~ scale_x_continuous(breaks = seq(1,4, by=0.1))
+      # )) +
+      geom_text(aes(label = labels, color = ontology), x = 13.5, hjust = 0, size=6) +
+      # scale_fill_viridis_d(option = "turbo", begin=0.2, end=0.9) +
+      scale_fill_manual(values=rainbow(n = 38, v = 0.7, s=0.6)) +
+      guides(fill="none",
+             size=guide_legend(title = "Number of Genes", size = 1)) +
+      theme_classic() +
+      theme(panel.grid.major.y =  element_line(color="black",size = 0.1),
+            axis.text = element_text(size=14),
+            # axis.text.y = element_text(color = top_paths_profiles$text_color),
+            legend.position = 'left',
+            panel.spacing.x = unit(19.5, "lines"),
+            plot.margin = margin(r = 11.5, unit = "cm"))
+
+
+
+# svglite("figures/combat_seq/bubble_plots/time_course_profiles_facet_plot_allOntology.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), width = 25, height = 10)
+bubble_plot_profile 
+# dev.off()
+```
+
+
+## TopGO 
+
+https://bioconductor.org/packages/devel/bioc/vignettes/topGO/inst/doc/topGO.pdf
+
+```{r}
+#  loaded three environments GOBPTerm, GOMFTerm and GOCCTerm
+suppressPackageStartupMessages(library(topGO))
+```
+
+topGO_2.46.0 (current 2.5.0, but how current are the GO annots themselves??)
+
+```{r}
+go_terms_avail <- c(ls(GOBPTerm),ls(GOMFTerm),ls(GOCCTerm))
+# length(go_terms_avail)
+# length(unique(go_terms_avail))
+table(unique(GO_annots$go_id) %in% go_terms_avail)
+missing <- unique(setdiff(GO_annots$go_id, go_terms_avail)) #46 missing 
+
+GO_annots %>% 
+  filter(go_id %in% missing) %>%
+  dplyr::select(ontology, go_id) %>% 
+  distinct() %>% 
+  arrange(ontology) 
+
+length(unique(GO_annots$gene_id)) #4,868
+length(unique(GO_annots$go_id)) #3230
+
+table(gene_clusts_dfs$cluster8$gene_id %in% unique(GO_annots$gene_id))
+table(all_genes %in% unique(GO_annots$gene_id))
+```
+
+```{r}
+gene2GO <- GO_annots %>% pull(go_id,name=gene_id)
+
+topGO_eset <- cb_eset
+masigpro_id <- pData(topGO_eset) %>% 
+  group_by(time_point) %>% 
+  mutate(masigpro_id=paste("Pf",  time_point, 
+                           paste0("Rep", 1:n()), sep="_")) %>% 
+  ungroup() %>% 
+  pull(masigpro_id)
+
+pData(topGO_eset)$masigpro_id <- masigpro_id
+colnames(topGO_eset) <- masigpro_id
+topGO_eset <- topGO_eset[,!grepl("Day2", colnames(topGO_eset))]
+```
+
+```{r}
+all_genes <- fData(topGO_eset) %>% pull(gene_id)
+gene_list <- as.numeric(all_genes %in% gene_clusts_dfs$cluster8$gene_id , 1,0) %>% 
+  as.factor() %>% 
+  set_names(all_genes)
+
+# table(gene_list)
+
+godata_BP <- new("topGOdata", 
+              ontology = c("BP"), 
+              nodeSize = 5,
+              allGenes = gene_list,
+              annot = annFUN.gene2GO, 
+              gene2GO = gene2GO)
+
+# godata_BP
+```
+
+
+```{r}
+whichTests()
+whichAlgorithms()
+```
+
+## goseq
+
+```{r}
+library(goseq)
+library(GenomicRanges)
+conflicted::conflict_prefer("select", "dplyr")
+conflicted::conflict_prefer("filter", "dplyr")
+conflicted::conflict_prefer("mutate", "dplyr")
+```
+
+```{r message=FALSE}
+edb <- ensembldb::EnsDb("species_genomes/GRCh38_GRCm39_Pf3D7v58.sqlite")
+edb
+```
+
+```{r}
+genes_gr <- ensembldb::genes(edb)[rownames(cb_se),]
+genes_gr %>%  head()
+# length(genes_gr) #5188
+
+gene_lens <- width(genes_gr) %>% 
+  set_names(names(genes_gr))
+```
+
+```{r}
+all_genes <- rownames(cb_se)
+gene_list <- as.numeric(all_genes %in% gene_clusts_dfs$cluster8$gene_id , 1,0) %>% 
+  as.factor() %>% 
+  set_names(all_genes)
+
+table(gene_list)
+```
+
+```{r}
+supportedGenomes() %>% 
+  filter(grepl("mal|plas|fal", species, ignore.case = T) | 
+           grepl("PF", db, ignore.case = TRUE))
+# supportedOrganisms()
+supportedGeneIDs() %>%  head()
+```
+
+Warning: initial point very close to some inequality constraintsWarning: collapsing to unique 'x' values
+
+```{r}
+GO_annots_clean <- GO_annots %>% 
+  group_by(ontology,go_id) %>% 
+  dplyr::mutate(n_genes = n())  %>% 
+  ungroup() %>% 
+  select(gene_id:go_id, n_genes) %>% 
+  dplyr::arrange(ontology, go_id,n_genes) %>% 
+  dplyr::filter(n_genes >= 5, n_genes <= 1000)
+
+GO_annots_clean %>% 
+  select(ontology, go_id) %>% 
+  distinct() %>% 
+  group_by(ontology) %>% 
+  dplyr::count()
+```
+
+```{r}
+GO_annots %>% 
+  filter(ontology=="Biological Process") %>% 
+  select(gene=gene_id,go_id)
+```
+
+
+```{r}
+input_go <- 
+  GO_annots_clean %>%
+  filter(ontology=="Biological Process") %>% 
+  dplyr::arrange(gene_id) %>% 
+  select(gene=gene_id,go_id) %>% 
+  as.data.frame()
+
+
+pwf <- nullp(DEgenes = gene_list, 
+             genome = "PF3D7",
+             id = "ensGene",
+             bias.data = gene_lens)
+```
+
+```{r}
+go_res <- goseq(pwf, 
+                genome = "PF3D7",
+                id = "ensGene",
+                gene2cat = input_go, 
+                method = "Wallenius",
+                # method = "Sampling",
+                repcnt = 2000,
+                use_genes_without_cat = F)
+```
+
+Error: node stack overflow
+Error during wrapup: node stack overflow
+Error: no more error handlers available (recursive errors?); invoking 'abort' restart
+
+```{r}
+go_res_clean <- go_res %>% 
+  as.data.frame() %>% 
+  dplyr::mutate(p_adj = p.adjust(p = as.numeric(over_represented_pvalue),
+                                 method = "BH")) %>% 
+  dplyr::select(category, p_adj, everything())
+
+# quantile(go_res_clean$p_adj)
+go_res_clean
+```
+
+
+## PlasmoDB 
+
+```{r}
+Day2 <- read.csv("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv", comment.char = "#")
+
+Day2 %>%
+  dplyr::filter(logFC > 0) %>%
+  pull(gene_id) %>%
+  write.table(.,"GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
+              sep="\t", quote=FALSE, row.names = FALSE)
+
+Day2 %>%
+  dplyr::filter(logFC < 0) %>%
+  pull(gene_id) %>% 
+  write.table(.,"GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
+              sep="\t", quote=FALSE, row.names = FALSE)
+
+sigs_all_df_d456 <-  read.csv("time_course/masigpro/masigpro_significant_genes_d456_results.csv") %>% 
+  rename_at(vars(X), ~c("gene_id"))
+
+gene_clusts_dfs <- purrr::map(unique(sigs_all_df_d456$gene_cluster), function(clust){
+  out <- here::here(file.path("GO_enrichment",paste0("cluster",clust)))
+  dir.create(out,recursive = T, showWarnings = FALSE)
+  
+  sigs_all_df_d456 %>%
+    dplyr::filter(gene_cluster==clust) %>% 
+    pull(gene_id) %>%
+    write.table(., file.path(out,
+                             paste0("Heps_Pf_vs_sporozorite_combat-seq_corrected_masigpro_cluster",clust, ".csv")),
+                sep="\t", quote=FALSE, row.names = FALSE)
+})
+```
+
+https://static-content.veupathdb.org/documents/GO-Enrichment.pdf
+
+```{r}
+# From PLASMODB GO analysis - need to find the GO terms themselves...
+res_path <- dir("GO_enrichment/",
+                recursive = TRUE,
+                pattern = ".tsv",
+                full.names = TRUE)
+res <- purrr::map(res_path, function(x) read.delim(x) %>% 
+                    janitor::clean_names())
+names(res) <- basename(res_path) %>% gsub("hiddenGoEnrichmentResult_|.tsv", "",.)
+lapply(res, head)
+```
+
+```{r}
+# BiocManager::install("org.Pf.plasmo.db", 
+#                      lib=.libPaths()[1])
+#org.Pf.plasmo.db is based on old data that are no longer updated. org.Pf.plasmo.db is deprecated and will be removed from Bioconductor version 3.15.
+# library(org.Pf.plasmo.db)
+# BiocManager::install("malaria.db0", lib=.libPaths()[1])
+```
+
+```{r}
+create_bubble_plots <- function(df){
+  
+    input <- df %>% 
+      mutate(neg_log10_P=-log10(p_value),
+             log2_FC=log2(fold_enrichment+1)) %>% 
+      arrange(benjamini)
+    
+    temp <- input %>% 
+      dplyr::filter(benjamini < 0.05) %>% 
+      mutate(id=factor(id, levels = rev(id)))
+  
+    if(nrow(temp) == 0){
+      temp <- input %>% 
+        mutate(id=factor(id, levels = rev(id)))
+    }
+    
+    n <- min(20,nrow(temp))
+    temp <- temp %>%  
+      dplyr::slice(1:n)
+    
+    bubble_plot <- ggplot(temp, aes(x=neg_log10_P, y=id)) +
+      geom_point(aes(size=result_count, fill=id), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(1,10)) +
+      labs(x="-log10(p-value)", y="") +
+      scale_y_discrete(expand = c(0.05,0)) +
+      theme(panel.grid.major.x = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) +
+      guides(fill="none",
+             # size="none",
+             size=guide_legend(title = "Number of DEGs with GO Term",
+                               size = 1)
+             ) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA))
+
+    # return(bubble_plot)
+    tab <-  ggplot(temp, aes(x = 0, y = id, label=name)) +
+        geom_text(size = 3,
+                  hjust = 0,
+                  nudge_x = 0)  +
+
+        scale_y_discrete(expand = c(0.05,0)) +
+        scale_x_continuous(expand = expansion(mult = c(0,1e2))) +
+        coord_cartesian(clip="off",
+                        xlim=c(0, 500)) +
+        theme_void()
+
+    return(bubble_plot +
+      tab + 
+      plot_layout(widths = c(1, 2.5), guides='collect') &
+      theme(legend.position='top'))
+}
+```
+
+```{r fig.height=5, fid.width=10}
+purrr::map(names(res),function(df_ID){ 
+  svglite(paste0("kappe_s_",df_ID,"_bubbleplot.svg"), height = 5, width = 10)
+  print(create_bubble_plots(res[[df_ID]]))
+  dev.off()
+})
+
+# tab
+```
+
+
 # Motif Analysis
 
 https://bioconductor.org/packages/release/bioc/vignettes/universalmotif/inst/doc/MotifManipulation.pdf
@@ -1695,28 +2649,10 @@ In the first step in constructing a PWM, a basic position frequency matrix (PFM)
 From the PFM, a position probability matrix (PPM) can now be created by dividing that former nucleotide count at each position by the number of sequences, thereby normalising the values. 
 
 
-```{r eval=FALSE}
+```{r eval=TRUE}
 # Prepare data for HOMER
 Day2 <- read.csv("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv", comment.char = "#")
 
-dir.create("motif_analysis/homer/day2/up",recursive = T,showWarnings = FALSE)
-dir.create("motif_analysis/homer/day2/down",recursive = T, showWarnings = FALSE)
-
-
-# Day2 %>%
-#   dplyr::filter(logFC > 0) %>%
-#   pull(gene_id) %>% 
-#   write.table(.,"motif_analysis/homer/day2/up/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
-#               sep="\t", quote=FALSE, row.names = FALSE)
-# 
-# Day2 %>%
-#   dplyr::filter(logFC < 0) %>%
-#   pull(gene_id) %>% 
-#   write.table(.,"motif_analysis/homer/day2/down/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
-#               sep="\t", quote=FALSE, row.names = FALSE)
-```
-
-```{r}
 time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
   rename_at(vars(X), ~c("gene_id")) %>% 
   mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>% 
@@ -1763,6 +2699,1309 @@ gene_clusts_combined_dfs <- purrr::map(unique(time_course$combined_gene_clusters
 
 table(time_course$gene_cluster_factor,
       time_course$combined_gene_clusters)
+```
+
+```{r eval=FALSE}
+dir.create("motif_analysis/homer/day2/up",recursive = T,showWarnings = FALSE)
+dir.create("motif_analysis/homer/day2/down",recursive = T, showWarnings = FALSE)
+
+
+# Day2 %>%
+#   dplyr::filter(logFC > 0) %>%
+#   pull(gene_id) %>% 
+#   write.table(.,"motif_analysis/homer/day2/up/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
+#               sep="\t", quote=FALSE, row.names = FALSE)
+# 
+# Day2 %>%
+#   dplyr::filter(logFC < 0) %>%
+#   pull(gene_id) %>% 
+#   write.table(.,"motif_analysis/homer/day2/down/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
+#               sep="\t", quote=FALSE, row.names = FALSE)
+```
+
+## AP2 Motif Set 
+
+*PWMs:*
+- PWM scores are defined as the log-ratio of the PPM and the background frequencies:
+- the position weight matrix (PWM), which uses the PPM and a background model to get an idea of “expected” sequences, and thereby can assign weights to each letter at each position. 
+- “Background” refers here to the base composition at non-specific sites (i.e. here, sequences that do not necessarily bind the TF).
+- The background is often assumed to be either uniform (i.e. 1/4 for each of A, T, C, and G), or to be the genome-wide nucleotide frequencies. PWM scores are defined as the log-ratio of the PPM and the background frequencies
+
+*ICMs*
+
+- highlight conserved over non-conserved sites.
+- The information content matrix (ICM) is a scaled version of the PPM, where each position gets scaled by its information content (IC) measured in bits.
+- Most conserved sites have an IC of 2 bits.
+- This form can be visualised as a “sequence logo”, 
+  - Reference: https://ivanek.github.io/analysisOfGenomicsDataWithR/13_Motifs_html.html
+  - https://bioconductor.org/packages/devel/bioc/vignettes/monaLisa/inst/doc/monaLisa.html
+
+See: matchPWM()
+https://rdrr.io/github/Bioconductor/Biostrings/man/matchPWM.html
+https://stat.ethz.ch/pipermail/bioconductor/2008-April/022029.html
+
+MotifDB
+https://bioconductor.org/packages/3.15/bioc/html/MotifDb.html
+
+
+### Supplemental Data
+
+Dataset S1.  Position weight matrices for all AP2 domains that bound DNA in PBM experiments.
+The data is from protein-binding microarray experiments performed using purified, GST-tagged AP2 domains.
+The "Seed-and-Wobble" algorithm was applied to combine the data from two separate experiments and create position weight matrices (PWMs) (Berger et al. 2006).
+
+  - An enrichment score cut-off of 0.45 was used to distinguish high affinity binding data from low affinity and non-specific binding.
+
+  - Each column in the matrices represent the nucleotide position from 5' to 3'.
+  - Reference: doi:10.1371/journal.ppat.1001165
+  
+```{bash, eval=FALSE}
+cd references/AP2_motifs/
+TFs=$(cat ppat.1001165.s019.csv | grep -E "^PF" | tr -d "," )
+for tf in $(echo "$TFs"); do grep -E -A 4 "$tf" ppat.1001165.s019.csv | grep -v $tf >${tf}.csv  ; done
+```
+
+```{r}
+tf_dfs <- dir("references/AP2_motifs", pattern = "^P", full.names = TRUE)
+# tf_dfs
+
+AP2_PWMlist <- TFBSTools::PWMatrixList()
+for(df in tf_dfs){
+  motif_name <- str_split_fixed(df, pattern="/", n=3)[,3] %>% 
+    gsub(".csv","", .)
+  pwm <- read.delim(df, sep=",", header=FALSE,row.names = 1)
+  rownames(pwm) <- gsub(":","",rownames(pwm))
+  pwm <- pwm[,!sapply(pwm, function(x) any(is.na(x)))] 
+  pwm <- TFBSTools::as.matrix(pwm)
+
+  pwm_mat <- PWMatrix(ID=motif_name,
+                      name=motif_name,
+                      strand = "*",
+                      profileMatrix = pwm)
+  AP2_PWMlist[[motif_name]] <- pwm_mat
+}
+names(AP2_PWMlist) <- str_split_fixed(tf_dfs, pattern="/", n=3)[,3] %>%  gsub(".csv","", .)
+
+# AP2_PWMlist
+```
+
+```{r eval=FALSE}
+names(AP2_PWMlist) %>% 
+  gsub("_D[0-9]|_DLD","",.) %>% 
+  cat(., file="ap2_old_ids.txt", sep="\n")
+```
+
+```{r}
+# maxScore(Matrix(AP2_PWMlist$PF07_0126_DLD))
+sapply(AP2_PWMlist, function(x) maxScore(Matrix(x))) %>% 
+  data.frame(score=.) %>% 
+  rownames_to_column("motif") %>% 
+  arrange(score) %>% 
+  mutate(percent_75=score*0.75, 
+         percent_90=score*0.9)
+```
+
+```{r}
+# VERY Similar to the Motifs on the PlasmoDB, though PlasmoDB lacks a y-axis
+# view_motifs(AP2_PWMlist$PF07_0126_DLD,
+#             use.type='PWM')
+# view_motifs(AP2_PWMlist$PF11_0404_D1, use.type = 'PWM')
+```
+
+
+
+### AP2 MotifDB
+
+MotifDB:
+ - More than 9900 annotated position frequency matrices (PFM) from 14 public sources, for multiple organisms.
+
+```{r}
+# can't get this to be a correct df without substantial cleaning, so NVM
+# was going to use the motif counts to convert the PFMs to PWMs (the n=XXX paramater)
+AP2_table_S2 <- tabulizer::extract_tables("references/AP2_motifs/AP2_TF_motif_counts.pdf",
+                                           output="character")
+
+# AP2_table_S2
+```
+
+```{r}
+#The MotifDb query function performs a broad, case-neutral text search through all the metadata (all the annotation) for all of the motifs. It returns a list of matching motifs. More information about the metadata is provided below.
+pf_motifs <- query(MotifDb, andStrings=(c("AP2","Pfalciparum")))
+pf_motif_meta <- pf_motifs@elementMetadata
+# head(pf_motif_meta)
+
+# PMID: 21060817 is the same data from the supplemental files from  Campbell et al,..,.Manuel Llinás, 2010
+table(pf_motif_meta$geneSymbol)
+table(pf_motif_meta$pubmedID)
+table(pf_motif_meta$tfFamily) #AP2 and 2 NAs
+
+#PFM position frequency matrix
+# pf_motifs@listData %>% head(.,n=2)
+```
+
+```{r}
+# See also: convert_type(motif, type="PPM")
+# this assumes a count of n=100 sequences, and I'm not sure if that is introducing too much bias
+#could potentially use the data in the pdf supplemental table
+ap2_res <- convert_motifs(pf_motifs, class="TFBSTools-PWMatrix")
+names(ap2_res) <- names(pf_motifs@listData)
+# head(ap2_res)
+
+# view_motifs(ap2_res[1:3], dedup.names = TRUE)
+# class(ap2_res[[1]])
+```
+
+```{r}
+sel_motifs <- pf_motifs@elementMetadata %>% 
+  as.data.frame() %>% 
+  rownames_to_column("id") %>% 
+  filter(pubmedID=="21060817")
+
+pf_motifs_sel <- pf_motifs[sel_motifs$id]
+ap2_PFM <- convert_motifs(pf_motifs_sel,class = "TFBSTools-PFMatrix")
+ap2_PFMList <- do.call(PFMatrixList,ap2_PFM)
+ap2_similarity <- motifSimilarity(ap2_PFMList)
+
+dim(ap2_similarity)
+# rowData(day2_enr$enrichement_res)$motif.pfm
+# rowData(day2_enr$enrichement_res)$motif.pwm
+```
+
+```{r}
+# pdf("figures/motif_analysis/ap2_motif_similarity_corrplot.pdf", height = 7, width = 7)
+corrplot::corrplot(ap2_similarity)
+# dev.off()
+```
+
+
+## AP2 Expression 
+
+```{r}
+ap2_expn <- expression[ap2_ids$gene_id,rownames(input_d456)] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols=matches("Pf"),
+               names_to="masigpro_id",
+               values_to = "log2_CPM") %>% 
+  left_join(., design_input, by="masigpro_id") %>% 
+  left_join(., ap2_ids, by="gene_id") %>%
+  mutate(new_rownames=paste(input_id,gene_id, sep=":")) %>% 
+  select(gene_id,input_id, everything())
+
+
+head(ap2_expn)
+dim(ap2_expn) #238  10
+```
+
+```{r fig.height=10, fig.width=10, eval=FALSE}
+# pdf("figures/combat_seq/AP2_gene_expression_freescales_boxplot.pdf", height = 15, width=10)
+ggplot(ap2_expn, aes(x=analysis_factor_group, y=log2_CPM)) +
+  geom_boxplot(aes(fill=analysis_factor_group),
+               alpha=0.3,
+               outlier.colour = NA) +
+  geom_point(aes(color=analysis_factor_group),
+             size=2, alpha=0.7) +
+  facet_wrap(~new_rownames, scales = "free", ncol=3) +
+  scale_fill_viridis_d(direction = -1) +
+  scale_color_viridis_d(end=0.925,direction = -1) +
+  theme_classic() +
+  theme(legend.position = "top", 
+        axis.text.x = element_text(angle=25, vjust=1, hjust=1))
+# dev.off()
+```
+
+```{r}
+ap2_mat <- expression[ap2_ids$gene_id,rownames(input_d456)]
+rownames(ap2_mat) <- unique(ap2_expn$new_rownames)
+
+# head(ap2_mat)
+# dim(ap2_mat)
+```
+
+```{r}
+# pdf("figures/combat_seq/AP2_heatmap_log2CPM_heatmap.pdf", height = 10, width = 10)
+pheatmap::pheatmap(ap2_mat,
+                   annotation_col = select(design_input, analysis_factor_group))
+# dev.off()
+```
+
+```{r}
+library(ComplexHeatmap)
+
+# expression <- log2(assay(cb_se,"cpm")+1)[,design_input$sample_id_cat]
+# colnames(expression) <- rownames(design_input)
+```
+
+```{r}
+ap2_mat_rename <- ap2_mat
+colnames(ap2_mat_rename) <- gsub("Pf_Day0","sporozoites",colnames(expn_mat)) %>% 
+  gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2", .)
+
+# head(ap2_mat_rename)
+
+new_pal <- circlize::colorRamp2(c(-4,-2, 0, 2, 4),
+                      c("deepskyblue3", "deepskyblue","white", "red", "red3"),
+                      space="sRGB")
+
+
+sample_anno <- design_input %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))) %>% 
+  set_rownames(.$masigpro_id) %>% 
+  as.data.frame()
+
+
+gene_anno <- select(ap2_expn, gene_id=new_rownames, gene_name_or_symbol) %>% 
+  distinct() %>% 
+  mutate(genome="PF3D7") %>% 
+  as.data.frame() %>% 
+  set_rownames(.$new_rownames)
+
+s_ord <- c("sporozoites_Rep1", "sporozoites_Rep2", "sporozoites_Rep3", "sporozoites_Rep4", "sporozoites_Rep5", 
+           "Day4_Pf_LS_Rep3",  "Day4_Pf_LS_Rep1",  "Day4_Pf_LS_Rep2",
+           "Day5_Pf_LS_Rep2",  "Day5_Pf_LS_Rep3", "Day5_Pf_LS_Rep1" , 
+           "Day6_Pf_LS_Rep1",  "Day6_Pf_LS_Rep2" , "Day6_Pf_LS_Rep3")
+```
+
+
+```{r fig.height=10, fig.width=10, eval=FALSE}
+conflicted::conflict_prefer("rowVars","matrixStats")
+
+heat_colors <- colorRamp2(c(-3,-2, -1, 0, 1, 2,3),c("deepskyblue4","deepskyblue2","deepskyblue","white", "red","red2","red4"), space="LAB")
+# heat_colors <- colorRamp2(c(-3,-1,0,1,3),c("deepskyblue3","deepskyblue","white", "red", "red3"), space="LAB")
+# 
+ap2_complexHmap <- create_pf_heatmaps(TMMCPM = ap2_mat_rename, 
+                   sample_annots = sample_anno,
+                   gene_annots = gene_anno,
+                   order_ids = s_ord,
+                   heatmap_colors = heat_colors,
+                   GOI = rownames(ap2_mat_rename),
+                   center_scale = TRUE)
+
+
+# png(paste0("figures/combat_seq/AP2_expression/AP2_heatmap_row_zscores_heatmap.png"),units="in", height = 10, width = 15, res=150)
+# svglite(paste0("figures/combat_seq/AP2_expression/AP2_heatmap_row_zscores_heatmap.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 10, width = 15)
+ap2_complexHmap$heatmap + ap2_complexHmap$hmap_anno$geneLabels
+# dev.off()
+```
+
+
+## AP2 monaLisa
+
+calcBinnedMotifEnrR:
+
+Motif enrichments are then calculated for each bin, normalizing for differences in sequence composition in a very similar way as originally done by Homer (Heinz et al. 2010).
+
+We recommend using this function to do the binned motif enrichment analysis, since it corrects for sequence composition differences similarly to Homer, but is implemented more efficiently.
+
+ we would recommend to use regions of similar or even equal lengths to avoid a length bias, for example by using a fixed-size region around the midpoint of each region of interest. 
+
+GC-Bias:
+GC-poorer than in other bins. A strong bias of this kind could give rise to false positives in that bin, e.g. enrichments of AT-rich motifs.
+bias *may* be ignored because the built-in sequence composition correction, but check of AT rich motifs. 
+
+Generally speaking, we recommend a minimum of ~100 sequences per bin as fewer sequences may lead to small motif counts and thus either small or unstable enrichment. 
+
+So for the time course clusters, I'll keep them all as 1 bin
+
+```{r}
+save_monaL_plots <- function(monalisa_res, prefix){
+  
+    pdf(paste0(prefix,"_GC_content.pdf"), height=7, width=7)
+    print(plotBinDiagnostics(monalisa_res$target_seqs, monalisa_res$input_bins, aspect="GCfrac"))
+    dev.off()
+    
+    pdf(paste0(prefix,"_bin_distribution.pdf"), height=7, width=7)
+    print(plotBinDensity(mcols(monalisa_res$target_promoters)[[7]], monalisa_res$input_bins, legend = "topleft"))
+    dev.off()
+    
+    
+    maxEnr <- ceiling(max(assay(monalisa_res$enrichment_res, "log2enr"), na.rm=TRUE))
+    maxSig <- ceiling(max(assay(monalisa_res$enrichment_res,"negLog10P"), na.rm = TRUE))
+    
+    pdf(paste0(prefix,"_log2Enr_p.value_heatmap.pdf"), height = 10, width = 14)
+    plotMotifHeatmaps(x = monalisa_res$enrichment_res, 
+                      which.plots = c("log2enr", "negLog10P"), 
+                      width = 2.0,
+                      cluster = TRUE,
+                      maxEnr = maxEnr, 
+                      maxSig = maxSig, 
+                      show_motif_GC = TRUE)
+    dev.off()
+}
+```
+
+
+### Day 2
+
+A negLog10 P or FDR > 1.3 will ~= 0.050118
+A negLog10 P or FDR > 4.0 will ~= 0.0001
+
+
+day2_enr <- readRDS("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
+day2_enr[["enrichment_res"]] <- day2_enr$enrichement_res # spelling error 
+day2_AP2_results <- read.csv("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv")
+
+```{r}
+day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
+                      sep=",",comment.char = "#")
+# head(day2_de)
+# dim(day2_de) #1978   20
+```
+
+```{r}
+day2_enr <- readRDS("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
+# day2_enr <- motif_enrichment_workflow(targets_df = day2_de,
+#                             col_to_bin = "logFC",
+#                             PWMs = AP2_PWMlist,
+#                             proms_gr = pf_proms_gr,
+#                             genome_bs = genome,
+#                             make_bins = TRUE,
+#                             use_bg_regions = TRUE)
+
+# saveRDS(day2_enr, "motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
+```
+
+```{r}
+day2_AP2_results <- create_motif_df(motif_result_list = day2_enr, col_to_bin = "logFC")
+
+# dim(day2_AP2_results) #44 
+# write.csv(day2_AP2_results, "motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv", row.names = FALSE)
+```
+
+```{r}
+# assays(day2_enr$enrichement_res)
+d2p <- save_monaL_plots(day2_enr, prefix = "figures/motif_analysis/Day2_vs_SPZ")
+```
+
+```{r}
+p_vals <- assay(day2_enr$enrichment_res,"negLog10P")
+idx <- which(p_vals[,1] > 1.2 | p_vals[,2] > 1.2)
+
+# pdf("figures/motif_analysis/day2_ap2_motif_heatmap.pdf", height = 5, width = 7)
+plotMotifHeatmaps(x = day2_enr$enrichment_res[idx,], 
+                  which.plots = c("log2enr"), 
+                  width = 1.8, 
+                  cluster = TRUE,
+                  show_dendrogram = TRUE, 
+                  width.seqlogo = 1,
+                  show_seqlogo = FALSE)
+# dev.off()
+```
+
+
+```{r}
+day2_sig <- day2_AP2_results %>% 
+  mutate(motif = as.factor(motif),
+         logFC = as.factor(logFC)) %>% 
+  group_by(motif,.drop = FALSE) %>% 
+  filter(any(negLog10P >= 1.2)) %>% 
+  ungroup() %>% 
+  mutate(log2enr_clean=ifelse(negLog10P >= 1.2, log2enr, NA)) %>% 
+  select(motif:log2enr, log2enr_clean, everything()) %>% 
+  arrange(log2enr_clean) %>% 
+  mutate(motif=factor(motif, levels = unique(motif)))
+
+# day2_sig
+
+day2_top_logos <- purrr::map(unique(day2_sig$motif), function(name){
+    mat <- Matrix(AP2_PWMlist[[name]])
+    if(ncol(mat) >= 20){
+      lims <- c(4,21)
+      breaks <- seq(5,20,by=5)
+    }else{
+      lims <- c(1,ncol(mat)+2)
+      breaks <- seq(1,ncol(mat)+2,by=5)
+    }
+    ggseqlogo(mat) +
+      labs(title=name) +
+      suppressMessages(scale_x_continuous(expand = c(0,0), 
+                         limits = lims,
+                         breaks= breaks)) +
+      theme(plot.title = element_text(size=14,vjust = 0.5, hjust = 0.5),
+            axis.text = element_text(size=14),
+            axis.title = element_text(size=14),
+            plot.margin = margin())
+  })
+
+# length(day2_top_logos)
+names(day2_top_logos) <- unique(day2_sig$motif)
+```
+
+```{r}
+day2_enr <- ggplot(day2_sig, aes(y=motif, x=logFC, fill=log2enr_clean)) +
+  geom_tile(color="black") +
+  coord_fixed() +
+  scale_y_discrete(expand = c(0,0)) +
+  scale_x_discrete(labels=c("upregulated","downregulated"), expand = c(0,0)) +
+  scale_fill_viridis_c(na.value = 'white', option = "A", 
+                       begin = 0.15, end = 0.9, direction = -1) +
+  labs(y="") +
+  theme_classic() +
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14))
+
+# day2_enr
+```
+
+
+```{r fig.height=10, fig.width=10}
+
+layout_rows <- "
+AB
+AC
+AD
+AE
+AF
+"
+
+# wdts <- c(0.6,0.6,0.75)
+#matrix(data=c(rep(1,5), rep(0.5,5)), nrow = 5, ncol = 2)
+# hts <- c(rep(0.5,5), 1)
+
+# svglite("figures/motif_analysis/day2_ap2_motif_seqlogos_heatmap.svg", height = 7, width=11,  system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+day2_enr + 
+  day2_top_logos$PF10_0075_D3 +
+  day2_top_logos$PF13_0097 +
+  day2_top_logos$PFE0840c_D2 +
+  day2_top_logos$PF14_0533 + 
+  day2_top_logos$PFD0985w_D2 + 
+  plot_layout(design = layout_rows,
+              guides = 'collect')
+# dev.off()
+```
+
+
+
+
+### Time-Course 
+
+NOTE: the BiocParallel framework does not utilized the seed in set.seed(), so the results of this with the time-course clusters lacks the reproducibility of setting RNGseed in biocparallel. 
+
+Now the question is - how does one select the most appropriate seed? Or simply forget p-values and select hits as those that are present in top sig hits X% of the time when varying the seed? Average the p-values and log2 enrichment values?
+
+is this a function of the small genome?? that the random sampling does appear to have an effect on the results. 
+
+```{r}
+tc_clusters <- time_course %>% 
+  mutate(gene_cluster = paste0("cluster", gene_cluster) %>% as.factor()) %>% 
+  select(gene_id, gene_cluster)
+
+tc_profiles <- time_course %>% 
+  mutate(combined_gene_clusters=as.factor(combined_gene_clusters)) %>% 
+  select(gene_id, combined_gene_clusters) %>% 
+  arrange(combined_gene_clusters)
+```
+
+```{r}
+cluster_motifs <- readRDS("motif_analysis/monaLisa/time_course_ap2_results_list.RDS")
+```
+
+```{r eval=FALSE}
+cluster_nums <- unique(tc_clusters$gene_cluster)
+cluster_motifs <- list()
+for (cluster in cluster_nums){
+  
+  input <- tc_clusters[tc_clusters$gene_cluster == cluster, ] %>% 
+    droplevels()
+
+  enr <- motif_enrichment_workflow(targets_df = input,
+                            col_to_bin = "gene_cluster",
+                            PWMs = AP2_PWMlist,
+                            # seed = 5,
+                            proms_gr = pf_proms_gr,
+                            genome_bs = genome,
+                            make_bins = FALSE,
+                            use_bg_regions = TRUE)
+  
+  cluster_motifs[[cluster]] <- enr
+}
+
+# saveRDS(cluster_motifs,"motif_analysis/monaLisa/time_course_ap2_results_list.RDS")
+```
+
+```{r}
+with_prom_bg <- purrr::map_dfr(cluster_motifs, create_motif_df)
+
+# write.csv(with_prom_bg,"motif_analysis/monaLisa/time_course_ap2_results.csv", row.names = FALSE)
+
+with_prom_bg %>%
+  # filter(gene_cluster=="cluster7") %>%
+  filter(negLog10P > 1.2) %>%
+  group_by(gene_cluster) %>%
+  dplyr::slice(1)
+```
+
+```{r}
+profile_motifs <- readRDS("motif_analysis/monaLisa/time_course_profiles_ap2_results_list.RDS")
+```
+
+```{r eval=FALSE}
+profile_nums <- unique(tc_profiles$combined_gene_clusters)
+profile_motifs <- list()
+for (profile in profile_nums){
+  
+  input <- tc_profiles[tc_profiles$combined_gene_clusters == profile, ] %>% 
+    droplevels()
+
+  enr <- motif_enrichment_workflow(targets_df = input,
+                            col_to_bin = "combined_gene_clusters",
+                            PWMs = AP2_PWMlist,
+                            # seed = 5,
+                            proms_gr = pf_proms_gr,
+                            genome_bs = genome,
+                            make_bins = FALSE,
+                            use_bg_regions = TRUE)
+  
+  profile_motifs[[profile]] <- enr
+}
+
+# saveRDS(profile_motifs, "motif_analysis/monaLisa/time_course_profiles_ap2_results_list.RDS")
+```
+
+```{r}
+profiles_with_prom_bg <- purrr::map_dfr(profile_motifs, create_motif_df, col_to_bin="combined_gene_clusters")
+
+# write.csv(profiles_with_prom_bg,"motif_analysis/monaLisa/time_course_profiles_ap2_results.csv", row.names=FALSE)
+
+profiles_with_prom_bg %>% 
+  filter(negLog10P > 1.2) %>% 
+  group_by(combined_gene_clusters) %>% 
+  dplyr::slice(1)
+```
+
+```{r}
+table(profiles_with_prom_bg$combined_gene_clusters)
+```
+
+```{r}
+colData(profile_motifs$Profile1$enrichment_res)
+rowData(profile_motifs$Profile1$enrichment_res)
+
+# metadata(profile_motifs$Profile1$enrichment_res)
+# assay(profile_motifs$Profile1$enrichment_res, "sumForegroundWgtWithHits")
+```
+
+
+### Count Frequencies and hits 
+
+```{r}
+cluster_hits <- purrr::map_dfr(names(cluster_motifs), function(motif_res){
+  
+  hits <- findMotifHits(query = AP2_PWMlist,
+              subject = cluster_motifs[[motif_res]]$target_seqs,
+              method = "matchPWM",
+              min.score = 10)
+  hits %>%
+    as.data.frame() %>%
+    group_by(pwmid) %>%
+    summarise(mean_score=mean(score),
+              transcript_hits = paste0(unique(seqnames) %>% as.character(), collapse = "; "),
+              .groups = 'keep') %>%
+    ungroup() %>%
+    mutate(gene_cluster=motif_res) %>% 
+    select(motif=pwmid,
+           gene_cluster,
+           transcript_hits) 
+})
+
+# cluster_hits
+```
+
+```{r}
+cluster_hits_enr <- with_prom_bg %>% 
+    left_join(., cluster_hits,
+              by=c("motif", "gene_cluster")) %>% 
+    select(motif,gene_cluster:expForegroundWgtWithHits,
+           sumForegroundWgtWithHits:sumBackgroundWgtWithHits,
+           everything()) %>%
+    arrange(gene_cluster, desc(negLog10P))
+    
+dim(cluster_hits_enr)
+# write.csv(cluster_hits_enr, "motif_analysis/monaLisa/time_course_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
+```
+
+
+```{r}
+motif_hits_profiles <- purrr::map_dfr(names(profile_motifs), function(motif_res){
+  print(motif_res)
+  hits <- findMotifHits(query = AP2_PWMlist,
+              subject = profile_motifs[[motif_res]]$target_seqs,
+              method = "matchPWM",
+              min.score = 10)
+  hits %>%
+    as.data.frame() %>%
+    group_by(pwmid) %>%
+    summarise(mean_score=mean(score),
+              transcript_hits = paste0(unique(seqnames) %>% as.character(), collapse = "; "),
+              .groups = 'keep') %>%
+    ungroup() %>%
+    mutate(combined_gene_clusters=motif_res) %>% 
+    select(motif=pwmid,
+           combined_gene_clusters,
+           transcript_hits)
+
+})
+```
+```{r}
+profile_hits_enr <- profiles_with_prom_bg %>% 
+    left_join(., motif_hits_profiles,
+              by=c("motif", "combined_gene_clusters")) %>% 
+    select(motif,combined_gene_clusters:expForegroundWgtWithHits,
+           sumForegroundWgtWithHits:sumBackgroundWgtWithHits,
+           everything()) %>%
+    arrange(combined_gene_clusters, desc(negLog10P))
+```
+
+```{r}
+head(profile_hits_enr)
+dim(profile_hits_enr)
+# write.csv(profile_hits_enr, "motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
+```
+
+### Visualization 
+
+#### Time course Clusters 
+
+```{r}
+with_prom_bg <- read.csv("motif_analysis/monaLisa/time_course_ap2_results.csv")
+profiles_with_prom_bg <- read.csv("motif_analysis/monaLisa/time_course_profiles_ap2_results.csv")
+```
+
+```{r}
+sel_tc_hits <- with_prom_bg %>% 
+  
+  mutate(gene_cluster_factor=factor(gsub("cluster", "", gene_cluster), 
+                                    levels=c(1,2,3,8,4,6,5,9,7))) %>% 
+  mutate(is_significant=ifelse(negLog10P > 1.3, "p < 0.05", "NS"), 
+         label = gene_cluster,
+         old_gene_id = gsub("_D[0-9]|_DLD","",motif)) %>%
+  
+  group_by(gene_cluster) %>% 
+  mutate(plot_fill=case_when(
+    negLog10P > 1.2 ~ log2enr,
+    TRUE ~ NA_real_)) %>% 
+  ungroup() %>% 
+  
+  group_by(motif) %>% 
+  filter(!all(is.na(plot_fill))) %>% 
+  ungroup() %>% 
+  
+  mutate(motif_factor_groups=paste0(label,":",motif)) %>% 
+  group_by(gene_cluster) %>%
+  arrange(desc(plot_fill), .by_group = T) %>% 
+  ungroup() %>% 
+  mutate(motif_factor_groups=factor(motif_factor_groups, levels=rev(motif_factor_groups))) %>% 
+  select(gene_cluster,
+         gene_cluster_factor,
+         motif_factor_groups,
+         plot_fill,log2enr, everything())
+
+
+sel_tc_hits %>% head()
+# length(unique(sel_tc_hits$motif)) # 9 
+# table(sel_tc_hits$gene_cluster, sel_tc_hits$is_significant)
+```
+
+```{r}
+top_motifs_per_clust <- sel_tc_hits %>% 
+  group_by(gene_cluster_factor) %>% 
+  dplyr::slice(1) %>% 
+  pull(motif, name=motif_factor_groups)
+
+# top_motifs_per_clust
+```
+
+```{r fig.height=4, fig.width=10}
+vals <- sel_tc_hits %>% 
+  mutate(plot_fill=ifelse(is.na(plot_fill), 0, plot_fill)) %>% 
+  pull(plot_fill, name=motif)
+
+clust_motifs <- hclust(dist(vals, method="euclidean"))
+# plot(clust_motifs)
+```
+
+```{r}
+order_motifs <- c("PF13_0026") %>% 
+  c(., clust_motifs$labels[clust_motifs$order][1:2]) %>% 
+  c(.,  tail(clust_motifs$labels[clust_motifs$order], n=20)) %>% 
+  unique()
+
+length(order_motifs)
+table(unique(sel_tc_hits$motif) %in%  order_motifs)
+```
+
+```{r}
+top_motifs_per_clust_df <- sel_tc_hits %>% 
+  group_by(gene_cluster) %>% 
+  dplyr::slice(1) 
+
+ap2_expn_top_hits <- purrr::map(top_motifs_per_clust_df$gene_cluster_factor,function(x){
+  subset <- top_motifs_per_clust_df %>% 
+    filter(gene_cluster_factor==x)
+
+  gene <- subset[["old_gene_id"]]
+  # grep(gene,ap2_expn$input_id, value=T)
+  ap2_expn %>%
+    filter(grepl(gene,input_id)) %>%
+    mutate(gene_cluster=x,
+           motif=subset[["motif"]]) %>%
+    select(1:2,gene_cluster,motif, everything())
+})
+# ap2_expn_top_hits
+names(ap2_expn_top_hits) <- top_motifs_per_clust_df$motif_factor_groups
+
+# lapply(ap2_expn_top_hits, function(x) table(x$gene_id, x$input_id))
+# lapply(ap2_expn_top_hits, function(x) table(x$motif, x$input_id))
+```
+
+
+```{r}
+ap2_summary_stats <- ap2_expn_top_hits %>% 
+  bind_rows() %>% 
+  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
+  group_by(gene_cluster_factor, analysis_factor_group,motif) %>% 
+  mutate(mean=mean(log2_CPM),
+         sd=sd(log2_CPM),
+         cv=sd/mean, 
+         ymin=mean-sd,
+         ymax=mean+sd,
+         stat="transcription factor",
+        .groups = 'keep') %>% 
+  ungroup() %>% 
+  select(gene_cluster_factor, analysis_factor_group,
+         motif,masigpro_id,
+         stat,ymin:ymax, mean=log2_CPM) 
+
+
+tc_summary_stats <- expn_d456 %>% 
+  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
+  group_by(gene_cluster_factor, analysis_factor_group) %>% 
+  mutate(mean=mean(log2_CPM),
+         sd=sd(log2_CPM),
+         cv=sd/mean, 
+         ymin=mean-sd,
+         ymax=mean+sd) %>% 
+  group_by(gene_cluster_factor,analysis_factor_group, masigpro_id) %>% 
+  mutate(stat="time-course cluster",
+          mean=mean(log2_CPM),
+          motif="time-course cluster",
+         .groups = 'keep') %>% 
+  ungroup() %>%
+  select(gene_cluster_factor, analysis_factor_group, masigpro_id,
+         motif, stat, mean, ymin:ymax, label) %>% 
+  distinct() %>% 
+  bind_rows(ap2_summary_stats) %>% 
+
+  group_by(gene_cluster_factor) %>%
+  mutate(label=as.character(label)) %>%
+  mutate_at(vars(label), ~ifelse(is.na(.), label[!is.na(label)], .)) %>%
+  ungroup() %>% 
+  
+  group_by(gene_cluster_factor,analysis_factor_group,stat) %>%
+  mutate(middle_val=median(mean)) %>%
+  ungroup() %>%
+
+  arrange(gene_cluster_factor,analysis_factor_group) %>%
+  mutate(label=factor(label, levels=unique(label)))
+
+```
+
+
+```{r fig.height=10, fig.width=10}
+n <- length(unique(sel_tc_hits$motif))
+motif_colors <-  rep("grey50", 14) %>% 
+  set_names(unique(sel_tc_hits$motif))
+motif_colors[c("time-course cluster")] <- "green2"
+
+# barplot(rep(1,length(motif_colors)), col=motif_colors, names.arg = names(motif_colors), las=2, cex.names = 0.7)
+
+# Update the labels for the manuscript
+tc_lab_summary_stats <- tc_summary_stats %>% 
+    mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+    mutate(analysis_factor_group = gsub("_Rep[0-9]", "", masigpro_id) %>% 
+                                    factor(., levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))
+           ) %>% 
+  select(analysis_factor_group, everything())
+
+expn_labs_d456 <- expn_d456 %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))) %>% 
+  select(analysis_factor_group, everything())
+
+# Generate individual plots
+tc_AP2_plots <- create_motif_enr_plots(enr_df = sel_tc_hits,
+                       factor_column="gene_cluster_factor",
+                       motif_order =  order_motifs,
+                       summary_stats = tc_lab_summary_stats,
+                       expn_df_long = expn_labs_d456,
+                       PWMlist = AP2_PWMlist,
+                       motif_colors = motif_colors)
+
+layout_rows <- "
+ABC
+ABD
+ABE
+ABF
+ABG
+ABH
+ABI
+ABJ
+ABK
+"
+
+wdts <- c(0.6,0.6,0.75)
+
+
+# svglite("figures/motif_analysis/time_point_cluster_heatmap_seqlogos_tileplot_rows.svg", height = 20, width=20,
+        system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+tc_AP2_plots$time_cluster + 
+  tc_AP2_plots$motif_enr + #theme(axis.text.x = element_text(size=7, angle=45)) +
+  tc_AP2_plots$top_logos[[1]] +
+  tc_AP2_plots$top_logos[[2]] +
+  tc_AP2_plots$top_logos[[3]] +
+  tc_AP2_plots$top_logos[[4]] + 
+  tc_AP2_plots$top_logos[[5]] + 
+  tc_AP2_plots$top_logos[[6]] +
+  tc_AP2_plots$top_logos[[7]] + 
+  tc_AP2_plots$top_logos[[8]] + 
+  tc_AP2_plots$top_logos[[9]] +
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+dev.off()
+
+
+# svglite("figures/motif_analysis/time_point_cluster_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 20, width=20,
+        system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+tc_AP2_plots$time_ribbon + 
+  tc_AP2_plots$motif_enr + #theme(axis.text.x = element_text(size=7, angle=45)) +
+  tc_AP2_plots$top_logos[[1]] +
+  tc_AP2_plots$top_logos[[2]] + 
+  tc_AP2_plots$top_logos[[3]] + 
+  tc_AP2_plots$top_logos[[4]] + 
+  tc_AP2_plots$top_logos[[5]] +
+  tc_AP2_plots$top_logos[[6]] + 
+  tc_AP2_plots$top_logos[[7]] + 
+  tc_AP2_plots$top_logos[[8]] + 
+  tc_AP2_plots$top_logos[[9]] +
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# dev.off()
+```
+
+```{r fig.height=10, fig.width=10}
+hits_for_lineplot <- sel_tc_hits  %>% 
+  filter(!is.na(plot_fill)) %>% 
+  mutate(input_id=gsub("_D[12L].{0,}", "", motif)) %>% 
+  select(1:2, input_id, everything())
+
+summary_stats_means <- tc_summary_stats %>% 
+  filter(motif=="time-course cluster") %>% 
+  mutate(gene_id=motif, 
+         label=as.character(label)
+         ) %>% 
+  select(gene_id, gene_cluster_factor, 
+         analysis_factor_group,
+         motif,
+         mean=middle_val, label) %>% 
+  distinct()
+
+temp_summ <- ap2_expn %>% 
+  inner_join(., hits_for_lineplot, by="input_id") %>%
+  arrange(gene_cluster_factor) %>%
+  group_by(gene_cluster_factor, gene_id, motif, analysis_factor_group) %>% 
+  summarize(mean=mean(log2_CPM), .groups = 'keep') %>% 
+  ungroup() %>% 
+  bind_rows(summary_stats_means) %>% 
+  group_by(gene_cluster_factor) %>% 
+  mutate(label=ifelse(is.na(label), unique(label[!is.na(label)]), label)) %>% 
+  ungroup() %>% 
+  mutate(label=factor(label, levels=unique(label)))
+
+# temp_summ
+
+tf_genes <- unique(temp_summ$gene_id[grep("PF", temp_summ$gene_id)])
+color_code <- viridis::inferno(n = length(tf_genes), end=0.925,direction = -1) %>% 
+  set_names(., tf_genes) %>% 
+  c(., "time-course cluster"='grey70')
+
+gene_labels <- temp_summ %>% 
+  select(motif, gene_id) %>% 
+  unique() %>% 
+  pull(motif, name = gene_id) %>% 
+  .[names(color_code)]
+
+
+tc_line_plot_TFs <- ggplot(temp_summ %>% mutate(gene_id=factor(gene_id, levels = unique(gene_id))), 
+                           aes(x=analysis_factor_group, y=mean)) +
+  # motif expression over time 
+  geom_line(mapping = aes(group=gene_id, 
+                          color=gene_id), 
+            linetype = 'dashed') +
+  geom_point(aes(shape = analysis_factor_group, color=gene_id, fill=gene_id),
+                 # fill=analysis_factor_group), 
+             # color='white', 
+             size=3, alpha=0.75) +
+  facet_wrap(~label, ncol = 2, scales = 'free_x', 
+             strip.position = "left") +
+  scale_x_discrete(expand=c(0.05,0.05)) +
+  #color and shape and theme
+  scale_shape_manual(values = c(21,22,23,24,25)) +
+  # scale_fill_viridis_d(end=0.925,direction = -1) +
+  scale_color_manual(values=color_code, labels=gene_labels) +
+  scale_fill_manual(values=color_code, labels=gene_labels) +
+  labs(y="mean log2(CPM+1)", x = '') +
+  theme_classic() +
+  theme(strip.placement = 'outside', 
+        axis.text.x = element_text(angle = 15, vjust =1, hjust =1 ))
+
+# svg("figures/motif_analysis/time_point_cluster_ap2_enriched_motifs_linePlot.svg", height = 14, width = 10)
+tc_line_plot_TFs
+# dev.off()
+```
+
+
+#### Time course Profiles 
+
+```{r}
+sel_profile_hits <- profiles_with_prom_bg %>% 
+  
+  mutate(gene_cluster_factor=as.factor(combined_gene_clusters), 
+         gene_cluster=combined_gene_clusters) %>% 
+  mutate(is_significant=ifelse(negLog10P > 1.3, "p < 0.05", "NS"), 
+         label = gene_cluster,
+         old_gene_id = gsub("_D[0-9]|_DLD","",motif)) %>%
+  
+  group_by(gene_cluster) %>% 
+  mutate(plot_fill=case_when(
+    negLog10P > 1.2 ~ log2enr,
+    TRUE ~ NA_real_)) %>% 
+  ungroup() %>% 
+  
+  group_by(motif) %>% 
+  filter(!all(is.na(plot_fill))) %>% 
+  ungroup() %>% 
+  
+  mutate(motif_factor_groups=paste0(label,":",motif)) %>% 
+  group_by(gene_cluster) %>%
+  arrange(desc(plot_fill), .by_group = T) %>% 
+  ungroup() %>% 
+  mutate(motif_factor_groups=factor(motif_factor_groups,
+                                    levels=rev(motif_factor_groups))) %>% 
+  select(gene_cluster,
+         gene_cluster_factor,
+         motif_factor_groups,
+         plot_fill,log2enr, everything())
+
+
+# head(sel_profile_hits)
+# table(sel_profile_hits$gene_cluster, sel_profile_hits$is_significant) %>% as.data.frame()
+
+sel_profile_hits %>% 
+  group_by(gene_cluster, is_significant) %>% 
+  dplyr::count() %>% 
+  pivot_wider(names_from = is_significant, 
+              values_from = n)
+```
+
+
+```{r}
+top_motifs_per_clust <- sel_profile_hits %>% 
+  group_by(gene_cluster) %>% 
+  dplyr::slice(1) %>% 
+  pull(motif, name=motif_factor_groups)
+
+# top_motifs_per_clust
+```
+
+```{r fig.height=4, fig.width=10}
+vals <- sel_profile_hits %>% 
+  mutate(plot_fill=ifelse(is.na(plot_fill), 0, plot_fill)) %>% 
+  pull(plot_fill, name=motif)
+
+clust_profile_motifs <- hclust(dist(vals, method="euclidean"))
+# plot(clust_profile_motifs)
+```
+
+```{r}
+order_motifs_profile <- tail(clust_profile_motifs$labels[clust_profile_motifs$order], n=15) %>% 
+  c(., clust_profile_motifs$labels[clust_profile_motifs$order][1:3]) %>% 
+  unique()
+
+ap2_expn <- expression[ap2_ids$gene_id,rownames(input_d456)] %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols=matches("Pf"),
+               names_to="masigpro_id",
+               values_to = "log2_CPM") %>% 
+  left_join(., design_input, by="masigpro_id") %>% 
+  left_join(., ap2_ids, by="gene_id") %>%
+  select(gene_id,input_id, everything())
+
+
+head(ap2_expn)
+dim(ap2_expn) #238  10
+```
+
+```{r}
+top_motifs_per_profile_df <- sel_profile_hits %>% 
+  group_by(gene_cluster) %>% 
+  dplyr::slice(1) 
+
+ap2_expn_profiles <- purrr::map(top_motifs_per_profile_df$gene_cluster,function(x){
+  subset <- top_motifs_per_profile_df %>% 
+    filter(gene_cluster==x)
+
+  gene <- subset[["old_gene_id"]]
+  # grep(gene,ap2_expn$input_id, value=T)
+  ap2_expn %>%
+    filter(grepl(gene,input_id)) %>%
+    mutate(gene_cluster=x,
+           motif=subset[["motif"]]) %>%
+    select(1:2,gene_cluster,motif, everything())
+})
+# ap2_expn_top_hits
+names(ap2_expn_profiles) <- top_motifs_per_profile_df$motif_factor_groups
+
+# lapply(ap2_expn_profiles, function(x) table(x$gene_id, x$input_id))
+# lapply(ap2_expn_profiles, function(x) table(x$motif, x$input_id))
+```
+
+```{r}
+profile_labs <- time_course %>% 
+  group_by(combined_gene_clusters) %>% 
+  mutate(label=paste0(combined_gene_clusters,"\n(",length(unique(gene_id))," genes)")) %>% 
+  ungroup() %>% 
+  select(combined_gene_clusters, label) %>% 
+  distinct()
+
+# head(profile_labs)
+
+ap2_summary_stats <- ap2_expn_profiles %>% 
+  bind_rows() %>% 
+  mutate(gene_cluster_factor=as.factor(gene_cluster)) %>% 
+  group_by(gene_cluster_factor, analysis_factor_group,motif) %>% 
+  mutate(mean=mean(log2_CPM),
+         sd=sd(log2_CPM),
+         cv=sd/mean, 
+         ymin=mean-sd,
+         ymax=mean+sd,
+         stat="transcription factor",
+        .groups = 'keep') %>% 
+  ungroup() %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))) %>% 
+  select(gene_cluster_factor, analysis_factor_group,
+         motif,masigpro_id,
+         stat,ymin:ymax, mean=log2_CPM) 
+
+
+profile_expn_d456 <- expn_d456 %>% 
+  select(-label) %>% 
+  mutate(combined_gene_clusters=case_when(
+    grepl("1$|2$",gene_cluster) ~ "Profile1",
+    grepl("3$|8$", gene_cluster) ~ "Profile2",
+    grepl("4$|6$", gene_cluster) ~ "Profile3",
+    grepl("5$|9$", gene_cluster) ~ "Profile4",
+    grepl("7", gene_cluster) ~ "Profile5"
+  )) %>% 
+  mutate(gene_cluster_factor=as.factor(combined_gene_clusters)) %>% 
+  left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
+  
+  group_by(gene_cluster_factor, analysis_factor_group) %>%
+  mutate(median_val=median(log2_CPM),
+         mean_val=mean(log2_CPM)) %>%
+  ungroup() %>%
+  group_by(gene_cluster_factor, analysis_factor_group, masigpro_id) %>%
+  mutate(median_val_per_sample=median(log2_CPM),
+         mean_val_per_sample=mean(log2_CPM)) %>%
+  ungroup() %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS")))
+
+# head(profile_expn_d456)
+
+
+profile_summary_stats <- expn_d456 %>% 
+  select(-label) %>% 
+  mutate(combined_gene_clusters=case_when(
+    grepl("1$|2$",gene_cluster) ~ "Profile1",
+    grepl("3$|8$", gene_cluster) ~ "Profile2",
+    grepl("4$|6$", gene_cluster) ~ "Profile3",
+    grepl("5$|9$", gene_cluster) ~ "Profile4",
+    grepl("7", gene_cluster) ~ "Profile5"
+  )) %>% 
+  mutate(gene_cluster_factor=as.factor(combined_gene_clusters)) %>% 
+  left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
+  
+  group_by(gene_cluster_factor,
+           analysis_factor_group) %>% 
+  mutate(mean=mean(log2_CPM),
+         sd=sd(log2_CPM),
+         cv=sd/mean, 
+         ymin=mean-sd,
+         ymax=mean+sd) %>% 
+  
+  group_by(gene_cluster_factor,
+           analysis_factor_group,
+           masigpro_id) %>% 
+  mutate(stat="time-course profile",
+          mean=mean(log2_CPM),
+          motif="time-course profile",
+         .groups = 'keep') %>% 
+  ungroup() %>%
+  select(gene_cluster_factor,
+         analysis_factor_group, 
+         masigpro_id,
+         motif, stat, mean, ymin:ymax, label) %>% 
+  distinct() %>% 
+  bind_rows(ap2_summary_stats) %>% 
+  
+  group_by(gene_cluster_factor) %>% 
+  mutate(label=as.character(label)) %>% 
+  mutate_at(vars(label), ~ifelse(is.na(.), label[!is.na(label)], .)) %>% 
+  ungroup() %>% 
+  
+  group_by(gene_cluster_factor,analysis_factor_group,stat) %>% 
+  mutate(middle_val=median(mean)) %>% 
+  ungroup() %>% 
+  
+  arrange(gene_cluster_factor,analysis_factor_group) %>% 
+  mutate(label=factor(label, levels=unique(label))) %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   
+                            gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS")))
+
+
+# summary_stats
+
+n <- length(unique(sel_profile_hits$motif))
+motif_colors <-  rep("grey50", n) %>% 
+  set_names(unique(sel_profile_hits$motif))
+motif_colors[c("time-course profile")] <- "green2"
+
+profile_AP2_plots <- create_motif_enr_plots(enr_df = sel_profile_hits,
+                       factor_column="gene_cluster_factor",
+                       motif_order =  order_motifs_profile,
+                       summary_stats = profile_summary_stats,
+                       expn_df_long = profile_expn_d456,
+                       PWMlist = AP2_PWMlist,
+                       motif_colors = motif_colors)
+```
+
+```{r fig.height=10, fig.width=10}
+layout_rows <- "
+ABC
+ABD
+ABE
+ABF
+ABG
+"
+
+wdts <- c(0.6,0.6,0.75)
+
+
+
+# svglite("figures/motif_analysis/time_point_profile_heatmap_seqlogos_tileplot_rows.svg", height = 16, width=20, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+profile_AP2_plots$time_cluster +
+  profile_AP2_plots$motif_enr + 
+  profile_AP2_plots$top_logos[[1]] +
+  profile_AP2_plots$top_logos[[2]] + 
+  profile_AP2_plots$top_logos[[3]] + 
+  profile_AP2_plots$top_logos[[4]] + 
+  profile_AP2_plots$top_logos[[5]] + 
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# dev.off()
+
+wdts <- c(0.7,0.85,0.75)
+
+# svglite("figures/motif_analysis/time_point_profile_TFexpn_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 16, width=20, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+profile_AP2_plots$time_ribbon + 
+  profile_AP2_plots$motif_enr + #theme(axis.text.x = element_text(size=7, angle=25)) +
+  profile_AP2_plots$top_logos[[1]] +
+  profile_AP2_plots$top_logos[[2]] + 
+  profile_AP2_plots$top_logos[[3]] + 
+  profile_AP2_plots$top_logos[[4]] +
+  profile_AP2_plots$top_logos[[5]] +  
+  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
+# dev.off()
+```
+
+```{r fig.height=10, fig.width=10}
+hits_for_lineplot <- sel_profile_hits  %>% 
+  filter(!is.na(plot_fill)) %>% 
+  mutate(input_id=gsub("_D[12L].{0,}", "", motif)) %>% 
+  select(1:2, input_id, everything())
+
+summary_stats_means <- profile_summary_stats %>% 
+  filter(motif=="time-course profile") %>% 
+  mutate(gene_id=motif, 
+         label=as.character(label)
+         ) %>% 
+  select(gene_id, gene_cluster_factor, 
+         analysis_factor_group,
+         motif,
+         mean=middle_val, label) %>% 
+  distinct()
+
+temp_summ <- ap2_expn %>% 
+  inner_join(., hits_for_lineplot, by="input_id") %>%
+  arrange(gene_cluster_factor) %>%
+  group_by(gene_cluster_factor, 
+           gene_id, 
+           motif,
+           analysis_factor_group) %>% 
+  summarize(mean=mean(log2_CPM), .groups = 'keep') %>% 
+  ungroup() %>% 
+  bind_rows(summary_stats_means) %>% 
+  group_by(gene_cluster_factor) %>% 
+  mutate(label=ifelse(is.na(label), unique(label[!is.na(label)]), label)) %>% 
+  ungroup() %>% 
+  mutate(label=factor(label, levels=unique(label)))
+
+# temp_summ
+tf_genes <- unique(temp_summ$gene_id[grep("PF", temp_summ$gene_id)])
+color_code <- viridis::inferno(n = length(tf_genes), end=0.925,direction = -1) %>% 
+  set_names(., tf_genes) %>% 
+  c(., "time-course profile"='grey70')
+
+gene_labels <- temp_summ %>% 
+  select(motif, gene_id) %>% 
+  unique() %>% 
+  pull(motif, name = gene_id) %>% 
+  .[names(color_code)]
+
+profile_line_plot_TFs <- ggplot(temp_summ %>% mutate(gene_id=factor(gene_id, levels = unique(gene_id))), 
+                                aes(x=analysis_factor_group, y=mean)) +
+  # motif expression over time 
+  geom_line(aes(group=gene_id, color=gene_id), 
+            linetype = 'dashed') +
+  geom_point(aes(shape = analysis_factor_group, color=gene_id, fill=gene_id),
+             size=3, alpha=0.75) +
+  facet_wrap(~label, ncol = 2, scales = 'free_x', 
+             strip.position = "left") +
+  scale_x_discrete(expand=c(0.05,0.05)) +
+  #color and shape and theme
+  scale_shape_manual(values = c(21,22,23,24,25)) +
+  scale_color_manual(values=color_code, labels = gene_labels) +
+  scale_fill_manual(values=color_code, labels = gene_labels) +
+  labs(y="mean log2(CPM+1)", x = '') +
+  theme_classic() +
+  theme(strip.placement = 'outside', 
+        axis.text.x = element_text(angle = 15, vjust =1, hjust =1 ))
+
+# svg("figures/motif_analysis/time_point_profile_ap2_enriched_motifs_linePlot.svg", height = 10, width = 12)
+profile_line_plot_TFs
+# dev.off()
 ```
 
 
@@ -2687,1127 +4926,6 @@ possible_hits <- lapply(homer_dfs,homer_fuzzy_search, pf_groups=pf_groups_clean)
 
 
 
-## AP2 Motif Set 
-
-*PWMs:*
-- PWM scores are defined as the log-ratio of the PPM and the background frequencies:
-- the position weight matrix (PWM), which uses the PPM and a background model to get an idea of “expected” sequences, and thereby can assign weights to each letter at each position. 
-- “Background” refers here to the base composition at non-specific sites (i.e. here, sequences that do not necessarily bind the TF).
-- The background is often assumed to be either uniform (i.e. 1/4 for each of A, T, C, and G), or to be the genome-wide nucleotide frequencies. PWM scores are defined as the log-ratio of the PPM and the background frequencies
-
-*ICMs*
-
-- highlight conserved over non-conserved sites.
-- The information content matrix (ICM) is a scaled version of the PPM, where each position gets scaled by its information content (IC) measured in bits.
-- Most conserved sites have an IC of 2 bits.
-- This form can be visualised as a “sequence logo”, 
-  - Reference: https://ivanek.github.io/analysisOfGenomicsDataWithR/13_Motifs_html.html
-  - https://bioconductor.org/packages/devel/bioc/vignettes/monaLisa/inst/doc/monaLisa.html
-
-See: matchPWM()
-https://rdrr.io/github/Bioconductor/Biostrings/man/matchPWM.html
-https://stat.ethz.ch/pipermail/bioconductor/2008-April/022029.html
-
-MotifDB
-https://bioconductor.org/packages/3.15/bioc/html/MotifDb.html
-
-
-### Supplemental Data
-
-Dataset S1.  Position weight matrices for all AP2 domains that bound DNA in PBM experiments.
-The data is from protein-binding microarray experiments performed using purified, GST-tagged AP2 domains.
-The "Seed-and-Wobble" algorithm was applied to combine the data from two separate experiments and create position weight matrices (PWMs) (Berger et al. 2006).
-
-  - An enrichment score cut-off of 0.45 was used to distinguish high affinity binding data from low affinity and non-specific binding.
-
-  - Each column in the matrices represent the nucleotide position from 5' to 3'.
-  - Reference: doi:10.1371/journal.ppat.1001165
-  
-```{bash, eval=FALSE}
-cd references/AP2_motifs/
-TFs=$(cat ppat.1001165.s019.csv | grep -E "^PF" | tr -d "," )
-for tf in $(echo "$TFs"); do grep -E -A 4 "$tf" ppat.1001165.s019.csv | grep -v $tf >${tf}.csv  ; done
-```
-
-```{r}
-tf_dfs <- dir("references/AP2_motifs", pattern = "^P", full.names = TRUE)
-# tf_dfs
-
-AP2_PWMlist <- TFBSTools::PWMatrixList()
-for(df in tf_dfs){
-  motif_name <- str_split_fixed(df, pattern="/", n=3)[,3] %>% 
-    gsub(".csv","", .)
-  pwm <- read.delim(df, sep=",", header=FALSE,row.names = 1)
-  rownames(pwm) <- gsub(":","",rownames(pwm))
-  pwm <- pwm[,!sapply(pwm, function(x) any(is.na(x)))] 
-  pwm <- TFBSTools::as.matrix(pwm)
-
-  pwm_mat <- PWMatrix(ID=motif_name,
-                      name=motif_name,
-                      strand = "*",
-                      profileMatrix = pwm)
-  AP2_PWMlist[[motif_name]] <- pwm_mat
-}
-names(AP2_PWMlist) <- str_split_fixed(tf_dfs, pattern="/", n=3)[,3] %>%  gsub(".csv","", .)
-
-AP2_PWMlist
-```
-
-```{r eval=FALSE}
-names(AP2_PWMlist) %>% 
-  gsub("_D[0-9]|_DLD","",.) %>% 
-  cat(., file="ap2_old_ids.txt", sep="\n")
-```
-
-```{r}
-# maxScore(Matrix(AP2_PWMlist$PF07_0126_DLD))
-sapply(AP2_PWMlist, function(x) maxScore(Matrix(x))) %>% 
-  data.frame(score=.) %>% 
-  rownames_to_column("motif") %>% 
-  arrange(score) %>% 
-  mutate(percent_75=score*0.75, 
-         percent_90=score*0.9)
-```
-
-```{r}
-# VERY Similar to the Motifs on the PlasmoDB, though PlasmoDB lacks a y-axis
-# view_motifs(AP2_PWMlist$PF07_0126_DLD,
-#             use.type='PWM')
-# view_motifs(AP2_PWMlist$PF11_0404_D1, use.type = 'PWM')
-```
-
-
-
-### AP2 MotifDB
-
-MotifDB:
- - More than 9900 annotated position frequency matrices (PFM) from 14 public sources, for multiple organisms.
-
-```{r}
-# can't get this to be a correct df without substantial cleaning, so NVM
-# was going to use the motif counts to convert the PFMs to PWMs (the n=XXX paramater)
-AP2_table_S2 <- tabulizer::extract_tables("references/AP2_motifs/AP2_TF_motif_counts.pdf",
-                                           output="character")
-
-# AP2_table_S2
-```
-
-```{r}
-#The MotifDb query function performs a broad, case-neutral text search through all the metadata (all the annotation) for all of the motifs. It returns a list of matching motifs. More information about the metadata is provided below.
-pf_motifs <- query(MotifDb, andStrings=(c("AP2","Pfalciparum")))
-pf_motif_meta <- pf_motifs@elementMetadata
-# head(pf_motif_meta)
-
-# PMID: 21060817 is the same data from the supplemental files from  Campbell et al,..,.Manuel Llinás, 2010
-table(pf_motif_meta$geneSymbol)
-table(pf_motif_meta$pubmedID)
-table(pf_motif_meta$tfFamily) #AP2 and 2 NAs
-
-#PFM position frequency matrix
-# pf_motifs@listData %>% head(.,n=2)
-```
-
-```{r}
-# See also: convert_type(motif, type="PPM")
-# this assumes a count of n=100 sequences, and I'm not sure if that is introducing too much bias
-#could potentially use the data in the pdf supplemental table
-ap2_res <- convert_motifs(pf_motifs, class="TFBSTools-PWMatrix")
-names(ap2_res) <- names(pf_motifs@listData)
-# head(ap2_res)
-
-# view_motifs(ap2_res[1:3], dedup.names = TRUE)
-# class(ap2_res[[1]])
-```
-
-```{r}
-sel_motifs <- pf_motifs@elementMetadata %>% 
-  as.data.frame() %>% 
-  rownames_to_column("id") %>% 
-  filter(pubmedID=="21060817")
-
-pf_motifs_sel <- pf_motifs[sel_motifs$id]
-ap2_PFM <- convert_motifs(pf_motifs_sel,class = "TFBSTools-PFMatrix")
-ap2_PFMList <- do.call(PFMatrixList,ap2_PFM)
-ap2_similarity <- motifSimilarity(ap2_PFMList)
-
-dim(ap2_similarity)
-# rowData(day2_enr$enrichement_res)$motif.pfm
-# rowData(day2_enr$enrichement_res)$motif.pwm
-```
-
-```{r}
-# pdf("figures/motif_analysis/ap2_motif_similarity_corrplot.pdf", height = 7, width = 7)
-corrplot::corrplot(ap2_similarity)
-# dev.off()
-```
-
-
-## AP2 Expression 
-
-```{r}
-ap2_expn <- expression[ap2_ids$gene_id,rownames(input_d456)] %>% 
-  as.data.frame() %>% 
-  rownames_to_column("gene_id") %>% 
-  pivot_longer(cols=matches("Pf"),
-               names_to="masigpro_id",
-               values_to = "log2_CPM") %>% 
-  left_join(., design_input, by="masigpro_id") %>% 
-  left_join(., ap2_ids, by="gene_id") %>%
-  mutate(new_rownames=paste(input_id,gene_id, sep=":")) %>% 
-  select(gene_id,input_id, everything())
-
-
-head(ap2_expn)
-dim(ap2_expn) #238  10
-```
-
-```{r fig.height=10, fig.width=10}
-# pdf("figures/combat_seq/AP2_gene_expression_freescales_boxplot.pdf", height = 15, width=10)
-ggplot(ap2_expn, aes(x=analysis_factor_group, y=log2_CPM)) +
-  geom_boxplot(aes(fill=analysis_factor_group),
-               alpha=0.3,
-               outlier.colour = NA) +
-  geom_point(aes(color=analysis_factor_group),
-             size=2, alpha=0.7) +
-  facet_wrap(~new_rownames, scales = "free", ncol=3) +
-  scale_fill_viridis_d(direction = -1) +
-  scale_color_viridis_d(end=0.925,direction = -1) +
-  theme_classic() +
-  theme(legend.position = "top", 
-        axis.text.x = element_text(angle=25, vjust=1, hjust=1))
-# dev.off()
-```
-
-```{r}
-ap2_mat <- expression[ap2_ids$gene_id,rownames(input_d456)]
-rownames(ap2_mat) <- unique(ap2_expn$new_rownames)
-```
-
-```{r}
-# pdf("figures/combat_seq/AP2_heatmap_log2CPM_heatmap.pdf", height = 10, width = 10)
-pheatmap::pheatmap(ap2_mat,
-                   annotation_col = select(design_input, analysis_factor_group))
-# dev.off()
-```
-
-```{r}
-# pdf("figures/combat_seq/AP2_heatmap_row_zscores_heatmap.pdf", height = 10, width = 10)
-pheatmap::pheatmap(ap2_mat,
-                   annotation_col = select(design_input, analysis_factor_group),
-                   scale = "row")
-# dev.off()
-```
-
-
-
-## AP2 monaLisa
-
-calcBinnedMotifEnrR:
-
-Motif enrichments are then calculated for each bin, normalizing for differences in sequence composition in a very similar way as originally done by Homer (Heinz et al. 2010).
-
-We recommend using this function to do the binned motif enrichment analysis, since it corrects for sequence composition differences similarly to Homer, but is implemented more efficiently.
-
- we would recommend to use regions of similar or even equal lengths to avoid a length bias, for example by using a fixed-size region around the midpoint of each region of interest. 
-
-GC-Bias:
-GC-poorer than in other bins. A strong bias of this kind could give rise to false positives in that bin, e.g. enrichments of AT-rich motifs.
-bias *may* be ignored because the built-in sequence composition correction, but check of AT rich motifs. 
-
-Generally speaking, we recommend a minimum of ~100 sequences per bin as fewer sequences may lead to small motif counts and thus either small or unstable enrichment. 
-
-So for the time course clusters, I'll keep them all as 1 bin
-
-```{r}
-save_monaL_plots <- function(monalisa_res, prefix){
-  
-    pdf(paste0(prefix,"_GC_content.pdf"), height=7, width=7)
-    print(plotBinDiagnostics(monalisa_res$target_seqs, monalisa_res$input_bins, aspect="GCfrac"))
-    dev.off()
-    
-    pdf(paste0(prefix,"_bin_distribution.pdf"), height=7, width=7)
-    print(plotBinDensity(mcols(monalisa_res$target_promoters)[[7]], monalisa_res$input_bins, legend = "topleft"))
-    dev.off()
-    
-    
-    maxEnr <- ceiling(max(assay(monalisa_res$enrichment_res, "log2enr"), na.rm=TRUE))
-    maxSig <- ceiling(max(assay(monalisa_res$enrichment_res,"negLog10P"), na.rm = TRUE))
-    
-    pdf(paste0(prefix,"_log2Enr_p.value_heatmap.pdf"), height = 10, width = 14)
-    plotMotifHeatmaps(x = monalisa_res$enrichment_res, 
-                      which.plots = c("log2enr", "negLog10P"), 
-                      width = 2.0,
-                      cluster = TRUE,
-                      maxEnr = maxEnr, 
-                      maxSig = maxSig, 
-                      show_motif_GC = TRUE)
-    dev.off()
-}
-```
-
-
-### Day 2
-
-A negLog10 P or FDR > 1.3 will ~= 0.050118
-A negLog10 P or FDR > 4.0 will ~= 0.0001
-
-
-day2_enr <- readRDS("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
-day2_enr[["enrichment_res"]] <- day2_enr$enrichement_res # spelling error 
-day2_AP2_results <- read.csv("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv")
-
-```{r}
-day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
-                      sep=",",comment.char = "#")
-head(day2_de)
-# dim(day2_de) #1978   20
-```
-
-```{r}
-day2_enr <- readRDS("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
-# day2_enr <- motif_enrichment_workflow(targets_df = day2_de,
-#                             col_to_bin = "logFC",
-#                             PWMs = AP2_PWMlist,
-#                             proms_gr = pf_proms_gr,
-#                             genome_bs = genome,
-#                             make_bins = TRUE,
-#                             use_bg_regions = TRUE)
-
-# saveRDS(day2_enr, "motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
-```
-
-```{r}
-day2_AP2_results <- create_motif_df(motif_result_list = day2_enr, col_to_bin = "logFC")
-
-# dim(day2_AP2_results) #44 
-# write.csv(day2_AP2_results, "motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv", row.names = FALSE)
-```
-
-```{r}
-day2_AP2_results %>% 
-  filter(negLog10P > 1.2)
-```
-
-```{r}
-# assays(day2_enr$enrichement_res)
-d2p <- save_monaL_plots(day2_enr, prefix = "figures/motif_analysis/Day2_vs_SPZ")
-```
-
-```{r}
-p_vals <- assay(day2_enr$enrichment_res,"negLog10P")
-idx <- which(p_vals[,1] > 1.2 | p_vals[,2] > 1.2)
-
-# pdf("figures/motif_analysis/day2_ap2_motif_heatmap.pdf", height = 5, width = 7)
-plotMotifHeatmaps(x = day2_enr$enrichment_res[idx,], 
-                  which.plots = c("log2enr"), 
-                  width = 1.8, 
-                  cluster = TRUE,
-                  show_dendrogram = TRUE, 
-                  width.seqlogo = 1,
-                  show_seqlogo = FALSE)
-# dev.off()
-```
-
-### Time-Course 
-
-NOTE: the BiocParallel framework does not utilized the seed in set.seed(), so the results of this with the time-course clusters lacks the reproducibility of setting RNGseed in biocparallel. 
-
-Now the question is - how does one select the most appropriate seed? Or simply forget p-values and select hits as those that are present in top sig hits X% of the time when varying the seed? Average the p-values and log2 enrichment values?
-
-is this a function of the small genome?? that the random sampling does appear to have an effect on the results. 
-
-```{r}
-tc_clusters <- time_course %>% 
-  mutate(gene_cluster = paste0("cluster", gene_cluster) %>% as.factor()) %>% 
-  select(gene_id, gene_cluster)
-
-tc_profiles <- time_course %>% 
-  mutate(combined_gene_clusters=as.factor(combined_gene_clusters)) %>% 
-  select(gene_id, combined_gene_clusters) %>% 
-  arrange(combined_gene_clusters)
-```
-
-```{r}
-cluster_motifs <- readRDS("motif_analysis/monaLisa/time_course_ap2_results_list.RDS")
-```
-
-```{r eval=FALSE}
-cluster_nums <- unique(tc_clusters$gene_cluster)
-cluster_motifs <- list()
-for (cluster in cluster_nums){
-  
-  input <- tc_clusters[tc_clusters$gene_cluster == cluster, ] %>% 
-    droplevels()
-
-  enr <- motif_enrichment_workflow(targets_df = input,
-                            col_to_bin = "gene_cluster",
-                            PWMs = AP2_PWMlist,
-                            # seed = 5,
-                            proms_gr = pf_proms_gr,
-                            genome_bs = genome,
-                            make_bins = FALSE,
-                            use_bg_regions = TRUE)
-  
-  cluster_motifs[[cluster]] <- enr
-}
-
-# saveRDS(cluster_motifs,"motif_analysis/monaLisa/time_course_ap2_results_list.RDS")
-```
-
-```{r}
-with_prom_bg <- purrr::map_dfr(cluster_motifs, create_motif_df)
-
-# write.csv(with_prom_bg,"motif_analysis/monaLisa/time_course_ap2_results.csv", row.names = FALSE)
-
-with_prom_bg %>%
-  # filter(gene_cluster=="cluster7") %>%
-  filter(negLog10P > 1.2) %>%
-  group_by(gene_cluster) %>%
-  dplyr::slice(1)
-```
-
-```{r}
-profile_motifs <- readRDS("motif_analysis/monaLisa/time_course_profiles_ap2_results_list.RDS")
-```
-
-```{r eval=FALSE}
-profile_nums <- unique(tc_profiles$combined_gene_clusters)
-profile_motifs <- list()
-for (profile in profile_nums){
-  
-  input <- tc_profiles[tc_profiles$combined_gene_clusters == profile, ] %>% 
-    droplevels()
-
-  enr <- motif_enrichment_workflow(targets_df = input,
-                            col_to_bin = "combined_gene_clusters",
-                            PWMs = AP2_PWMlist,
-                            # seed = 5,
-                            proms_gr = pf_proms_gr,
-                            genome_bs = genome,
-                            make_bins = FALSE,
-                            use_bg_regions = TRUE)
-  
-  profile_motifs[[profile]] <- enr
-}
-
-# saveRDS(profile_motifs, "motif_analysis/monaLisa/time_course_profiles_ap2_results_list.RDS")
-```
-
-```{r}
-profiles_with_prom_bg <- purrr::map_dfr(profile_motifs, create_motif_df, col_to_bin="combined_gene_clusters")
-
-# write.csv(profiles_with_prom_bg,"motif_analysis/monaLisa/time_course_profiles_ap2_results.csv", row.names=FALSE)
-
-profiles_with_prom_bg %>% 
-  filter(negLog10P > 1.2) %>% 
-  group_by(combined_gene_clusters) %>% 
-  dplyr::slice(1)
-```
-
-```{r}
-table(profiles_with_prom_bg$combined_gene_clusters)
-```
-
-```{r}
-colData(profile_motifs$Profile1$enrichment_res)
-rowData(profile_motifs$Profile1$enrichment_res)
-
-# metadata(profile_motifs$Profile1$enrichment_res)
-# assay(profile_motifs$Profile1$enrichment_res, "sumForegroundWgtWithHits")
-```
-
-
-### Count Frequencies and hits 
-
-```{r}
-cluster_hits <- purrr::map_dfr(names(cluster_motifs), function(motif_res){
-  
-  hits <- findMotifHits(query = AP2_PWMlist,
-              subject = cluster_motifs[[motif_res]]$target_seqs,
-              method = "matchPWM",
-              min.score = 10)
-  hits %>%
-    as.data.frame() %>%
-    group_by(pwmid) %>%
-    summarise(mean_score=mean(score),
-              transcript_hits = paste0(unique(seqnames) %>% as.character(), collapse = "; "),
-              .groups = 'keep') %>%
-    ungroup() %>%
-    mutate(gene_cluster=motif_res) %>% 
-    select(motif=pwmid,
-           gene_cluster,
-           transcript_hits) 
-})
-
-# cluster_hits
-```
-
-```{r}
-cluster_hits_enr <- with_prom_bg %>% 
-    left_join(., cluster_hits,
-              by=c("motif", "gene_cluster")) %>% 
-    select(motif,gene_cluster:expForegroundWgtWithHits,
-           sumForegroundWgtWithHits:sumBackgroundWgtWithHits,
-           everything()) %>%
-    arrange(gene_cluster, desc(negLog10P))
-    
-dim(cluster_hits_enr)
-# write.csv(cluster_hits_enr, "motif_analysis/monaLisa/time_course_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
-```
-
-
-```{r}
-motif_hits_profiles <- purrr::map_dfr(names(profile_motifs), function(motif_res){
-  print(motif_res)
-  hits <- findMotifHits(query = AP2_PWMlist,
-              subject = profile_motifs[[motif_res]]$target_seqs,
-              method = "matchPWM",
-              min.score = 10)
-  hits %>%
-    as.data.frame() %>%
-    group_by(pwmid) %>%
-    summarise(mean_score=mean(score),
-              transcript_hits = paste0(unique(seqnames) %>% as.character(), collapse = "; "),
-              .groups = 'keep') %>%
-    ungroup() %>%
-    mutate(combined_gene_clusters=motif_res) %>% 
-    select(motif=pwmid,
-           combined_gene_clusters,
-           transcript_hits)
-
-})
-```
-```{r}
-profile_hits_enr <- profiles_with_prom_bg %>% 
-    left_join(., motif_hits_profiles,
-              by=c("motif", "combined_gene_clusters")) %>% 
-    select(motif,combined_gene_clusters:expForegroundWgtWithHits,
-           sumForegroundWgtWithHits:sumBackgroundWgtWithHits,
-           everything()) %>%
-    arrange(combined_gene_clusters, desc(negLog10P))
-```
-
-```{r}
-head(profile_hits_enr)
-dim(profile_hits_enr)
-# write.csv(profile_hits_enr, "motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
-```
-
-### Visualization 
-
-#### Time course Clusters 
-
-```{r}
-with_prom_bg <- read.csv("motif_analysis/monaLisa/time_course_ap2_results.csv")
-profiles_with_prom_bg <- read.csv("motif_analysis/monaLisa/time_course_profiles_ap2_results.csv")
-```
-
-```{r}
-sel_tc_hits <- with_prom_bg %>% 
-  
-  mutate(gene_cluster_factor=factor(gsub("cluster", "", gene_cluster), 
-                                    levels=c(1,2,3,8,4,6,5,9,7))) %>% 
-  mutate(is_significant=ifelse(negLog10P > 1.3, "p < 0.05", "NS"), 
-         label = gene_cluster,
-         old_gene_id = gsub("_D[0-9]|_DLD","",motif)) %>%
-  
-  group_by(gene_cluster) %>% 
-  mutate(plot_fill=case_when(
-    negLog10P > 1.2 ~ log2enr,
-    TRUE ~ NA_real_)) %>% 
-  ungroup() %>% 
-  
-  group_by(motif) %>% 
-  filter(!all(is.na(plot_fill))) %>% 
-  ungroup() %>% 
-  
-  mutate(motif_factor_groups=paste0(label,":",motif)) %>% 
-  group_by(gene_cluster) %>%
-  arrange(desc(plot_fill), .by_group = T) %>% 
-  ungroup() %>% 
-  mutate(motif_factor_groups=factor(motif_factor_groups, levels=rev(motif_factor_groups))) %>% 
-  select(gene_cluster,
-         gene_cluster_factor,
-         motif_factor_groups,
-         plot_fill,log2enr, everything())
-
-
-sel_tc_hits %>% head()
-# length(unique(sel_tc_hits$motif)) # 9 
-# table(sel_tc_hits$gene_cluster, sel_tc_hits$is_significant)
-```
-
-```{r}
-top_motifs_per_clust <- sel_tc_hits %>% 
-  group_by(gene_cluster_factor) %>% 
-  dplyr::slice(1) %>% 
-  pull(motif, name=motif_factor_groups)
-
-# top_motifs_per_clust
-```
-
-```{r fig.height=4, fig.width=10}
-vals <- sel_tc_hits %>% 
-  mutate(plot_fill=ifelse(is.na(plot_fill), 0, plot_fill)) %>% 
-  pull(plot_fill, name=motif)
-
-clust_motifs <- hclust(dist(vals, method="euclidean"))
-# plot(clust_motifs)
-```
-
-```{r}
-order_motifs <- c("PF13_0026") %>% 
-  c(., clust_motifs$labels[clust_motifs$order][1:2]) %>% 
-  c(.,  tail(clust_motifs$labels[clust_motifs$order], n=20)) %>% 
-  unique()
-
-length(order_motifs)
-table(unique(sel_tc_hits$motif) %in%  order_motifs)
-```
-
-```{r}
-top_motifs_per_clust_df <- sel_tc_hits %>% 
-  group_by(gene_cluster) %>% 
-  dplyr::slice(1) 
-
-ap2_expn_top_hits <- purrr::map(top_motifs_per_clust_df$gene_cluster_factor,function(x){
-  subset <- top_motifs_per_clust_df %>% 
-    filter(gene_cluster_factor==x)
-
-  gene <- subset[["old_gene_id"]]
-  # grep(gene,ap2_expn$input_id, value=T)
-  ap2_expn %>%
-    filter(grepl(gene,input_id)) %>%
-    mutate(gene_cluster=x,
-           motif=subset[["motif"]]) %>%
-    select(1:2,gene_cluster,motif, everything())
-})
-# ap2_expn_top_hits
-names(ap2_expn_top_hits) <- top_motifs_per_clust_df$motif_factor_groups
-
-# lapply(ap2_expn_top_hits, function(x) table(x$gene_id, x$input_id))
-# lapply(ap2_expn_top_hits, function(x) table(x$motif, x$input_id))
-```
-
-
-```{r}
-ap2_summary_stats <- ap2_expn_top_hits %>% 
-  bind_rows() %>% 
-  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
-  group_by(gene_cluster_factor, analysis_factor_group,motif) %>% 
-  mutate(mean=mean(log2_CPM),
-         sd=sd(log2_CPM),
-         cv=sd/mean, 
-         ymin=mean-sd,
-         ymax=mean+sd,
-         stat="transcription factor",
-        .groups = 'keep') %>% 
-  ungroup() %>% 
-  select(gene_cluster_factor, analysis_factor_group,
-         motif,masigpro_id,
-         stat,ymin:ymax, mean=log2_CPM) 
-
-
-tc_summary_stats <- expn_d456 %>% 
-  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
-  group_by(gene_cluster_factor, analysis_factor_group) %>% 
-  mutate(mean=mean(log2_CPM),
-         sd=sd(log2_CPM),
-         cv=sd/mean, 
-         ymin=mean-sd,
-         ymax=mean+sd) %>% 
-  group_by(gene_cluster_factor,analysis_factor_group, masigpro_id) %>% 
-  mutate(stat="time-course cluster",
-          mean=mean(log2_CPM),
-          motif="time-course cluster",
-         .groups = 'keep') %>% 
-  ungroup() %>%
-  select(gene_cluster_factor, analysis_factor_group, masigpro_id,
-         motif, stat, mean, ymin:ymax, label) %>% 
-  distinct() %>% 
-  bind_rows(ap2_summary_stats) %>% 
-
-  group_by(gene_cluster_factor) %>%
-  mutate(label=as.character(label)) %>%
-  mutate_at(vars(label), ~ifelse(is.na(.), label[!is.na(label)], .)) %>%
-  ungroup() %>% 
-  
-  group_by(gene_cluster_factor,analysis_factor_group,stat) %>%
-  mutate(middle_val=median(mean)) %>%
-  ungroup() %>%
-
-  arrange(gene_cluster_factor,analysis_factor_group) %>%
-  mutate(label=factor(label, levels=unique(label)))
-
-```
-
-```{r}
-n <- length(unique(sel_tc_hits$motif))
-motif_colors <-  rep("grey50", 14) %>% 
-  set_names(unique(sel_tc_hits$motif))
-motif_colors[c("time-course cluster")] <- "green2"
-# 
-# barplot(rep(1,length(motif_colors)), col=motif_colors, names.arg = names(motif_colors), las=2, cex.names = 0.7)
-
-
-tc_AP2_plots <- create_motif_enr_plots(enr_df = sel_tc_hits,
-                       factor_column="gene_cluster_factor",
-                       motif_order =  order_motifs,
-                       summary_stats = tc_summary_stats,
-                       expn_df_long = expn_d456,
-                       PWMlist = AP2_PWMlist,
-                       motif_colors = motif_colors)
-```
-
-```{r fig.height=10, fig.width=10}
-layout_rows <- "
-ABC
-ABD
-ABE
-ABF
-ABG
-ABH
-ABI
-ABJ
-ABK
-"
-
-wdts <- c(0.6,0.6,0.75)
-
-
-# svg("figures/motif_analysis/time_point_cluster_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=12)
-tc_AP2_plots$time_cluster + 
-  tc_AP2_plots$motif_enr + theme(axis.text.x = element_text(size=7, angle=45)) +
-  tc_AP2_plots$top_logos[[1]] +
-  tc_AP2_plots$top_logos[[2]] +
-  tc_AP2_plots$top_logos[[3]] +
-  tc_AP2_plots$top_logos[[4]] + 
-  tc_AP2_plots$top_logos[[5]] + 
-  tc_AP2_plots$top_logos[[6]] +
-  tc_AP2_plots$top_logos[[7]] + 
-  tc_AP2_plots$top_logos[[8]] + 
-  tc_AP2_plots$top_logos[[9]] +
-  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
-# dev.off()
-
-
-# svg("figures/motif_analysis/time_point_cluster_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=12)
-tc_AP2_plots$time_ribbon + 
-  tc_AP2_plots$motif_enr + theme(axis.text.x = element_text(size=7, angle=45)) +
-  tc_AP2_plots$top_logos[[1]] +
-  tc_AP2_plots$top_logos[[2]] + 
-  tc_AP2_plots$top_logos[[3]] + 
-  tc_AP2_plots$top_logos[[4]] + 
-  tc_AP2_plots$top_logos[[5]] +
-  tc_AP2_plots$top_logos[[6]] + 
-  tc_AP2_plots$top_logos[[7]] + 
-  tc_AP2_plots$top_logos[[8]] + 
-  tc_AP2_plots$top_logos[[9]] +
-  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
-# dev.off()
-```
-
-```{r fig.height=10, fig.width=10}
-hits_for_lineplot <- sel_tc_hits  %>% 
-  filter(!is.na(plot_fill)) %>% 
-  mutate(input_id=gsub("_D[12L].{0,}", "", motif)) %>% 
-  select(1:2, input_id, everything())
-
-summary_stats_means <- tc_summary_stats %>% 
-  filter(motif=="time-course cluster") %>% 
-  mutate(gene_id=motif, 
-         label=as.character(label)
-         ) %>% 
-  select(gene_id, gene_cluster_factor, 
-         analysis_factor_group,
-         motif,
-         mean=middle_val, label) %>% 
-  distinct()
-
-temp_summ <- ap2_expn %>% 
-  inner_join(., hits_for_lineplot, by="input_id") %>%
-  arrange(gene_cluster_factor) %>%
-  group_by(gene_cluster_factor, gene_id, motif, analysis_factor_group) %>% 
-  summarize(mean=mean(log2_CPM), .groups = 'keep') %>% 
-  ungroup() %>% 
-  bind_rows(summary_stats_means) %>% 
-  group_by(gene_cluster_factor) %>% 
-  mutate(label=ifelse(is.na(label), unique(label[!is.na(label)]), label)) %>% 
-  ungroup() %>% 
-  mutate(label=factor(label, levels=unique(label)))
-
-# temp_summ
-
-tf_genes <- unique(temp_summ$gene_id[grep("PF", temp_summ$gene_id)])
-color_code <- viridis::inferno(n = length(tf_genes), end=0.925,direction = -1) %>% 
-  set_names(., tf_genes) %>% 
-  c(., "time-course cluster"='grey70')
-
-gene_labels <- temp_summ %>% 
-  select(motif, gene_id) %>% 
-  unique() %>% 
-  pull(motif, name = gene_id) %>% 
-  .[names(color_code)]
-
-
-tc_line_plot_TFs <- ggplot(temp_summ %>% mutate(gene_id=factor(gene_id, levels = unique(gene_id))), 
-                           aes(x=analysis_factor_group, y=mean)) +
-  # motif expression over time 
-  geom_line(mapping = aes(group=gene_id, 
-                          color=gene_id), 
-            linetype = 'dashed') +
-  geom_point(aes(shape = analysis_factor_group, color=gene_id, fill=gene_id),
-                 # fill=analysis_factor_group), 
-             # color='white', 
-             size=3, alpha=0.75) +
-  facet_wrap(~label, ncol = 2, scales = 'free_x', 
-             strip.position = "left") +
-  scale_x_discrete(expand=c(0.05,0.05)) +
-  #color and shape and theme
-  scale_shape_manual(values = c(21,22,23,24,25)) +
-  # scale_fill_viridis_d(end=0.925,direction = -1) +
-  scale_color_manual(values=color_code, labels=gene_labels) +
-  scale_fill_manual(values=color_code, labels=gene_labels) +
-  labs(y="mean log2(CPM+1)", x = '') +
-  theme_classic() +
-  theme(strip.placement = 'outside', 
-        axis.text.x = element_text(angle = 15, vjust =1, hjust =1 ))
-
-# svg("figures/motif_analysis/time_point_cluster_ap2_enriched_motifs_linePlot.svg", height = 14, width = 10)
-tc_line_plot_TFs
-# dev.off()
-```
-
-
-#### Time course Profiles 
-
-```{r}
-sel_profile_hits <- profiles_with_prom_bg %>% 
-  
-  mutate(gene_cluster_factor=as.factor(combined_gene_clusters), 
-         gene_cluster=combined_gene_clusters) %>% 
-  mutate(is_significant=ifelse(negLog10P > 1.3, "p < 0.05", "NS"), 
-         label = gene_cluster,
-         old_gene_id = gsub("_D[0-9]|_DLD","",motif)) %>%
-  
-  group_by(gene_cluster) %>% 
-  mutate(plot_fill=case_when(
-    negLog10P > 1.2 ~ log2enr,
-    TRUE ~ NA_real_)) %>% 
-  ungroup() %>% 
-  
-  group_by(motif) %>% 
-  filter(!all(is.na(plot_fill))) %>% 
-  ungroup() %>% 
-  
-  mutate(motif_factor_groups=paste0(label,":",motif)) %>% 
-  group_by(gene_cluster) %>%
-  arrange(desc(plot_fill), .by_group = T) %>% 
-  ungroup() %>% 
-  mutate(motif_factor_groups=factor(motif_factor_groups,
-                                    levels=rev(motif_factor_groups))) %>% 
-  select(gene_cluster,
-         gene_cluster_factor,
-         motif_factor_groups,
-         plot_fill,log2enr, everything())
-
-
-# head(sel_profile_hits)
-# table(sel_profile_hits$gene_cluster, sel_profile_hits$is_significant) %>% as.data.frame()
-
-sel_profile_hits %>% 
-  group_by(gene_cluster, is_significant) %>% 
-  dplyr::count() %>% 
-  pivot_wider(names_from = is_significant, 
-              values_from = n)
-```
-
-
-```{r}
-top_motifs_per_clust <- sel_profile_hits %>% 
-  group_by(gene_cluster) %>% 
-  dplyr::slice(1) %>% 
-  pull(motif, name=motif_factor_groups)
-
-# top_motifs_per_clust
-```
-
-```{r fig.height=4, fig.width=10}
-vals <- sel_profile_hits %>% 
-  mutate(plot_fill=ifelse(is.na(plot_fill), 0, plot_fill)) %>% 
-  pull(plot_fill, name=motif)
-
-clust_profile_motifs <- hclust(dist(vals, method="euclidean"))
-# plot(clust_profile_motifs)
-```
-
-```{r}
-order_motifs_profile <- tail(clust_profile_motifs$labels[clust_profile_motifs$order], n=15) %>% 
-  c(., clust_profile_motifs$labels[clust_profile_motifs$order][1:3]) %>% 
-  unique()
-
-ap2_expn <- expression[ap2_ids$gene_id,rownames(input_d456)] %>% 
-  as.data.frame() %>% 
-  rownames_to_column("gene_id") %>% 
-  pivot_longer(cols=matches("Pf"),
-               names_to="masigpro_id",
-               values_to = "log2_CPM") %>% 
-  left_join(., design_input, by="masigpro_id") %>% 
-  left_join(., ap2_ids, by="gene_id") %>%
-  select(gene_id,input_id, everything())
-
-
-head(ap2_expn)
-dim(ap2_expn) #238  10
-```
-
-```{r}
-top_motifs_per_profile_df <- sel_profile_hits %>% 
-  group_by(gene_cluster) %>% 
-  dplyr::slice(1) 
-
-ap2_expn_profiles <- purrr::map(top_motifs_per_profile_df$gene_cluster,function(x){
-  subset <- top_motifs_per_profile_df %>% 
-    filter(gene_cluster==x)
-
-  gene <- subset[["old_gene_id"]]
-  # grep(gene,ap2_expn$input_id, value=T)
-  ap2_expn %>%
-    filter(grepl(gene,input_id)) %>%
-    mutate(gene_cluster=x,
-           motif=subset[["motif"]]) %>%
-    select(1:2,gene_cluster,motif, everything())
-})
-# ap2_expn_top_hits
-names(ap2_expn_profiles) <- top_motifs_per_profile_df$motif_factor_groups
-
-# lapply(ap2_expn_profiles, function(x) table(x$gene_id, x$input_id))
-# lapply(ap2_expn_profiles, function(x) table(x$motif, x$input_id))
-```
-
-```{r}
-profile_labs <- time_course %>% 
-  group_by(combined_gene_clusters) %>% 
-  mutate(label=paste0(combined_gene_clusters,"\n(",length(unique(gene_id))," genes)")) %>% 
-  ungroup() %>% 
-  select(combined_gene_clusters, label) %>% 
-  distinct()
-
-head(profile_labs)
-```
-
-```{r}
-ap2_summary_stats <- ap2_expn_profiles %>% 
-  bind_rows() %>% 
-  mutate(gene_cluster_factor=as.factor(gene_cluster)) %>% 
-  group_by(gene_cluster_factor, analysis_factor_group,motif) %>% 
-  mutate(mean=mean(log2_CPM),
-         sd=sd(log2_CPM),
-         cv=sd/mean, 
-         ymin=mean-sd,
-         ymax=mean+sd,
-         stat="transcription factor",
-        .groups = 'keep') %>% 
-  ungroup() %>% 
-  select(gene_cluster_factor, analysis_factor_group,motif,masigpro_id,
-         stat,ymin:ymax, mean=log2_CPM) 
-
-
-profile_expn_d456 <- expn_d456 %>% 
-  select(-label) %>% 
-  mutate(combined_gene_clusters=case_when(
-    grepl("1$|2$",gene_cluster) ~ "Profile1",
-    grepl("3$|8$", gene_cluster) ~ "Profile2",
-    grepl("4$|6$", gene_cluster) ~ "Profile3",
-    grepl("5$|9$", gene_cluster) ~ "Profile4",
-    grepl("7", gene_cluster) ~ "Profile5"
-  )) %>% 
-  mutate(gene_cluster_factor=as.factor(combined_gene_clusters)) %>% 
-  left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
-  
-  group_by(gene_cluster_factor, analysis_factor_group) %>%
-  mutate(median_val=median(log2_CPM),
-         mean_val=mean(log2_CPM)) %>%
-  ungroup() %>%
-  group_by(gene_cluster_factor, analysis_factor_group, masigpro_id) %>%
-  mutate(median_val_per_sample=median(log2_CPM),
-         mean_val_per_sample=mean(log2_CPM)) %>%
-  ungroup()
-
-# head(profile_expn_d456)
-
-
-profile_summary_stats <- expn_d456 %>% 
-  select(-label) %>% 
-  mutate(combined_gene_clusters=case_when(
-    grepl("1$|2$",gene_cluster) ~ "Profile1",
-    grepl("3$|8$", gene_cluster) ~ "Profile2",
-    grepl("4$|6$", gene_cluster) ~ "Profile3",
-    grepl("5$|9$", gene_cluster) ~ "Profile4",
-    grepl("7", gene_cluster) ~ "Profile5"
-  )) %>% 
-  mutate(gene_cluster_factor=as.factor(combined_gene_clusters)) %>% 
-  left_join(., profile_labs, by=c("combined_gene_clusters")) %>% 
-  
-  group_by(gene_cluster_factor,
-           analysis_factor_group) %>% 
-  mutate(mean=mean(log2_CPM),
-         sd=sd(log2_CPM),
-         cv=sd/mean, 
-         ymin=mean-sd,
-         ymax=mean+sd) %>% 
-  
-  group_by(gene_cluster_factor,
-           analysis_factor_group,
-           masigpro_id) %>% 
-  mutate(stat="time-course profile",
-          mean=mean(log2_CPM),
-          motif="time-course profile",
-         .groups = 'keep') %>% 
-  ungroup() %>%
-  select(gene_cluster_factor,
-         analysis_factor_group, 
-         masigpro_id,
-         motif, stat, mean, ymin:ymax, label) %>% 
-  distinct() %>% 
-  bind_rows(ap2_summary_stats) %>% 
-  
-  group_by(gene_cluster_factor) %>% 
-  mutate(label=as.character(label)) %>% 
-  mutate_at(vars(label), ~ifelse(is.na(.), label[!is.na(label)], .)) %>% 
-  ungroup() %>% 
-  
-  group_by(gene_cluster_factor,analysis_factor_group,stat) %>% 
-  mutate(middle_val=median(mean)) %>% 
-  ungroup() %>% 
-  
-  arrange(gene_cluster_factor,analysis_factor_group) %>% 
-  mutate(label=factor(label, levels=unique(label)))
-
-
-# summary_stats
-
-n <- length(unique(sel_profile_hits$motif))
-motif_colors <-  rep("grey50", n) %>% 
-  set_names(unique(sel_profile_hits$motif))
-motif_colors[c("time-course profile")] <- "green2"
-
-profile_AP2_plots <- create_motif_enr_plots(enr_df = sel_profile_hits,
-                       factor_column="gene_cluster_factor",
-                       motif_order =  order_motifs_profile,
-                       summary_stats = profile_summary_stats,
-                       expn_df_long = profile_expn_d456,
-                       PWMlist = AP2_PWMlist,
-                       motif_colors = motif_colors)
-```
-
-```{r fig.height=10, fig.width=10}
-layout_rows <- "
-ABC
-ABD
-ABE
-ABF
-ABG
-"
-
-wdts <- c(0.6,0.6,0.75)
-
-
-# svg("figures/motif_analysis/time_point_profile_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=14)
-profile_AP2_plots$time_cluster + profile_AP2_plots$motif_enr + 
-  profile_AP2_plots$top_logos[[1]] +
-  profile_AP2_plots$top_logos[[2]] + 
-  profile_AP2_plots$top_logos[[3]] + 
-  profile_AP2_plots$top_logos[[4]] + 
-  profile_AP2_plots$top_logos[[5]] + 
-  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
-# dev.off()
-```
-
-
-```{r fig.height=10, fig.width=10}
-wdts <- c(0.7,0.85,0.75)
-
-# svg("figures/motif_analysis/time_point_profile_TFexpn_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=12)
-profile_AP2_plots$time_ribbon + 
-  profile_AP2_plots$motif_enr + theme(axis.text.x = element_text(size=7, angle=25)) +
-  profile_AP2_plots$top_logos[[1]] +
-  profile_AP2_plots$top_logos[[2]] + 
-  profile_AP2_plots$top_logos[[3]] + 
-  profile_AP2_plots$top_logos[[4]] +
-  profile_AP2_plots$top_logos[[5]] +  
-  plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
-# dev.off()
-```
-
-```{r fig.height=10, fig.width=10}
-hits_for_lineplot <- sel_profile_hits  %>% 
-  filter(!is.na(plot_fill)) %>% 
-  mutate(input_id=gsub("_D[12L].{0,}", "", motif)) %>% 
-  select(1:2, input_id, everything())
-
-summary_stats_means <- profile_summary_stats %>% 
-  filter(motif=="time-course profile") %>% 
-  mutate(gene_id=motif, 
-         label=as.character(label)
-         ) %>% 
-  select(gene_id, gene_cluster_factor, 
-         analysis_factor_group,
-         motif,
-         mean=middle_val, label) %>% 
-  distinct()
-
-temp_summ <- ap2_expn %>% 
-  inner_join(., hits_for_lineplot, by="input_id") %>%
-  arrange(gene_cluster_factor) %>%
-  group_by(gene_cluster_factor, 
-           gene_id, 
-           motif,
-           analysis_factor_group) %>% 
-  summarize(mean=mean(log2_CPM), .groups = 'keep') %>% 
-  ungroup() %>% 
-  bind_rows(summary_stats_means) %>% 
-  group_by(gene_cluster_factor) %>% 
-  mutate(label=ifelse(is.na(label), unique(label[!is.na(label)]), label)) %>% 
-  ungroup() %>% 
-  mutate(label=factor(label, levels=unique(label)))
-
-# temp_summ
-tf_genes <- unique(temp_summ$gene_id[grep("PF", temp_summ$gene_id)])
-color_code <- viridis::inferno(n = length(tf_genes), end=0.925,direction = -1) %>% 
-  set_names(., tf_genes) %>% 
-  c(., "time-course profile"='grey70')
-
-gene_labels <- temp_summ %>% 
-  select(motif, gene_id) %>% 
-  unique() %>% 
-  pull(motif, name = gene_id) %>% 
-  .[names(color_code)]
-
-profile_line_plot_TFs <- ggplot(temp_summ %>% mutate(gene_id=factor(gene_id, levels = unique(gene_id))), 
-                                aes(x=analysis_factor_group, y=mean)) +
-  # motif expression over time 
-  geom_line(aes(group=gene_id, color=gene_id), 
-            linetype = 'dashed') +
-  geom_point(aes(shape = analysis_factor_group, color=gene_id, fill=gene_id),
-             size=3, alpha=0.75) +
-  facet_wrap(~label, ncol = 2, scales = 'free_x', 
-             strip.position = "left") +
-  scale_x_discrete(expand=c(0.05,0.05)) +
-  #color and shape and theme
-  scale_shape_manual(values = c(21,22,23,24,25)) +
-  scale_color_manual(values=color_code, labels = gene_labels) +
-  scale_fill_manual(values=color_code, labels = gene_labels) +
-  labs(y="mean log2(CPM+1)", x = '') +
-  theme_classic() +
-  theme(strip.placement = 'outside', 
-        axis.text.x = element_text(angle = 15, vjust =1, hjust =1 ))
-
-# svg("figures/motif_analysis/time_point_profile_ap2_enriched_motifs_linePlot.svg", height = 10, width = 12)
-profile_line_plot_TFs
-# dev.off()
-```
-
 
 
 
@@ -3850,843 +4968,13 @@ done
 ```
 
 
-# GO Terms
-
-https://plasmodb.org/plasmo/app/search/transcript/GeneByLocusTag
-
-http://current.geneontology.org/products/pages/downloads.html
-
--Panel C putative:
-Group for cluster trend:
-Profile 1 Highly expressed in SPZ down in LS ( Cluster 1 & 2),
-Profile 2 Highly expressed in SPZ reduced in LS (Cluster 3 and 8),
-Profile 3 expressed in SPZ upregulated in LS (Cluster 4 & 6),
-Profile 4 Increasing over LS development (Cluster 5 & Cluster 9),
-Profile 5 upregulated in mature LS forms (Cluster 7).
-
-
-* Evaluate if the new GO terms for this profiles increase significance and data interpretation. 
-
-
-```{r}
-day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
-                      sep=",",comment.char = "#")
-head(day2_de)
-# dim(day2_de) #1978   20
-
-time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
-  rename_at(vars(X), ~c("gene_id")) %>% 
-  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>% 
-  mutate(combined_gene_clusters=case_when(
-    grepl("1$|2$",gene_cluster) ~ "Profile1",
-    grepl("3$|8$", gene_cluster) ~ "Profile2",
-    grepl("4$|6$", gene_cluster) ~ "Profile3",
-    grepl("5$|9$", gene_cluster) ~ "Profile4",
-    grepl("7", gene_cluster) ~ "Profile5"
-  )) %>% 
-  dplyr::select(gene_id, matches("gene_cluster"), everything()) %>% 
-  arrange(gene_cluster)
-
-
-gene_clusts_dfs <- purrr::map(unique(time_course$gene_cluster), function(clust){
-  time_course %>%
-    dplyr::filter(gene_cluster==clust) 
-})
-names(gene_clusts_dfs) <- paste0("cluster", unique(time_course$gene_cluster))
-
-
-gene_clusts_combined_dfs <- purrr::map(unique(time_course$combined_gene_clusters), function(clust){
-  time_course %>%
-    dplyr::filter(combined_gene_clusters==clust) 
-}) %>% 
-  set_names(unique(time_course$combined_gene_clusters))
-
-# sapply(gene_clusts_dfs, dim)
-# head(gene_clusts_dfs$cluster1)
-# lapply(gene_clusts_dfs, function(x) quantile(x$betaTime))
-
-table(time_course$gene_cluster_factor,
-      time_course$combined_gene_clusters)
-```
-
-```{r}
-GO_descriptions <- GO_annots %>% 
-  dplyr::select(go_id, ontology, go_term_name) %>% 
-  distinct() %>% 
-  mutate_at(vars(ontology), ~gsub("\\s", "_", .))
-
-dim(GO_descriptions)
-# any(duplicated(GO_descriptions$go_id))
-GO_descriptions$ontology %>%  unique()
-```
-
-```{r}
-GO_annots_filtered <- GO_annots %>% 
-  group_by(ontology, go_id) %>% 
-  mutate(N=n()) %>% 
-  ungroup() %>% 
-  arrange(go_id) %>% 
-  filter(N>=5, N<=600) %>% 
-  select(gene_id, ontology, go_id, N)
-
-GO_annots_filtered
-# write.csv(GO_annots_filtered,"expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_filteredSetSizes_v58.txt", row.names = F)
-
-GO_annots_filtered %>% 
-  select(ontology, go_id) %>% 
-  distinct() %>% 
-  group_by(ontology) %>% 
-  dplyr::count()
-```
-
-
-## ClusterProfiler 
-
-```{r}
-library(clusterProfiler)
-```
-
-```{r}
-clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
-                                         label="go_term_name",Filter=TRUE){
-    
-    column <- glue::glue("Neg_log10_{pval_column}")
-    temp <- data.frame()
-    input <- df %>% 
-      dplyr::mutate( !!column := -log10(!!as.name(pval_column)))
-    
-    if(Filter){
-      temp <- input %>%
-        dplyr::filter( !!as.name(pval_column) < 0.05)
-    }
-    
-    if (nrow(temp) == 0){
-        temp <- input
-    }
-
-    n <- min(10,nrow(temp))
-    temp <- temp %>%
-      mutate(ID=factor(ID, levels = rev(ID))) %>%
-      dplyr::slice(1:n)
-
-    bubble_plot <- ggplot(temp,
-                          aes_string(x=column,
-                                     y="ID")) +
-      geom_point(aes(size=setSize, fill=ID), shape=21,
-                 alpha=0.8) +
-      scale_radius(range=c(1,10)) +
-      labs(x=glue::glue("-log10({pval_column})"), y="") +
-      scale_y_discrete(expand = c(0.1,0)) +
-      scale_x_continuous(expand = c(0.15,0)) +
-      guides(fill="none",
-             size=guide_legend(title = "Number of Genes",
-                               size = 1)) +
-      theme(legend.position = "left",
-            legend.key = element_rect(colour = NA, fill = NA),
-            plot.title = element_text(hjust = 0),
-            panel.grid.major.x = element_blank(),
-            panel.grid.minor.x = element_blank(),
-            panel.grid.major = element_line(color="black",size = 0.1),
-            panel.background = element_rect(fill="white"),
-            panel.border = element_rect(color="black", fill=NA)) 
-
-
-    tab <-  ggplot(temp, aes_string(x = "0", y = "ID", 
-                             label=label, 
-                             color="ontology")) +
-        geom_text(size = 4,
-                  hjust = 0,
-                  nudge_x = 0)  +
-        scale_y_discrete(expand = c(0.1,0)) +
-        scale_color_manual(values=c("Biological_Process"="tomato","Cellular_Component"="forestgreen",
-                                    "Molecular_Function"="dodgerblue","N/A"="grey")) +
-        # scale_x_continuous(expand = c(0,1)) +
-        scale_x_continuous(expand = expansion(mult = c(0,0.01))) +
-        theme_void()
-
-    bubble_plot +
-      tab +
-      plot_layout(widths = c(1, 2.5), guides='collect') &
-      theme(legend.position='left')
-    
-}
-
-replace_long_strings <- function(string){
-  t <- string
-  if(grepl(",", t)){
-    at <- stringr::str_locate_all(t,",")[[1]][,"end"]
-  }else{
-    at <- stringr::str_locate_all(t," ")[[1]][,"end"]
-  }
-  at <- at[at <= 40][length(at[at <= 40])]
-  stringr::str_sub(t, start=at[1],end = at[1]) <- "\n"
-  t
-}
-```
-
-```{r}
-d2_gsea_input <- day2_de %>% 
-  pull(logFC, name=gene_id)
-
-
-cats <- unique(GO_annots$ontology)
-D2_GSEA_objs <- purrr::map(cats, function(x){
-  
-    input_go_cats <- GO_annots %>% 
-      dplyr::filter(ontology==x) %>%
-      dplyr::select(ID=go_id, gene=gene_id)
-    
-    GSEA_res <- GSEA(gene = d2_gsea_input,
-                      TERM2GENE = input_go_cats,
-                      minGSSize = 5,
-                      maxGSSize = 600)
-})
-names(D2_GSEA_objs) <- cats
-```
-
-```{r}
-day2_go_clean <- purrr::map_dfr(D2_GSEA_objs, function(x) x@result) %>% 
-  left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
-  mutate(Direction=ifelse(NES>0, "Enriched_Day2","Enriched_SPZ")) %>% 
-  mutate(labels=case_when(
-    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1", go_term_name),
-    grepl("modulation", go_term_name) ~ gsub("^(.+) agg.+","\\1", go_term_name),
-    TRUE ~ go_term_name
-  )) %>% 
-  dplyr::select(ID,ontology:go_term_name,
-                Direction,
-                pvalue, qvalues,
-                everything()) %>% 
-  dplyr::arrange(qvalues)
-
-# day2_go_clean %>% filter(ontology == "Biological_Process")
-# table(day2_go_clean$Direction)
-# write.csv(day2_go_clean, "GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv", row.names = FALSE)
-```
-
-```{r}
-lab1 <- day2_go_clean %>% 
-  filter(ID=="GO:0006412") %>% 
-  mutate(label=paste(ID,go_term_name)) %>% 
-  pull(label)
-
-# svglite("figures/combat_seq/barcode_plots/day2_vs_spz_ClusterProfiler_GO0006412_barcode.svg",fix_text_size=FALSE, height = 5, width = 10, system_fonts = list(sans = "Open Sans"))
-bc1 <- gseaplot(D2_GSEA_objs$`Biological Process`, geneSetID = "GO:0006412", by="runningScore") +
-  labs(title=lab1)
-bc1
-# dev.off()
- 
-lab2 <- day2_go_clean %>% 
-  filter(ID=="GO:0044409") %>% 
-  mutate(label=paste(ID,go_term_name)) %>% 
-  pull(label)
-
-# svglite("figures/combat_seq/barcode_plots/day2_vs_spz_ClusterProfiler_GO0044409_barcode.svg", fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 10)
-bc2 <- gseaplot(D2_GSEA_objs$`Biological Process`, geneSetID = "GO:0044409", by="runningScore") +
-  labs(title=lab2)
-bc2
-# dev.off()
-```
-
-```{r}
-layout <- "
-BCCC
-DDD#
-"
-
-d2_up <- day2_go_clean %>% 
-  filter(Direction == "Enriched_Day2") %>% 
-  clusterProfiler_bubble_plots(.,label = "labels")  +
-  labs(title = "GO Terms Enriched in Day 2")
-
-d2_down <- day2_go_clean %>%
-  filter(Direction == "Enriched_SPZ") %>%
-  clusterProfiler_bubble_plots(.,label = "labels") +
-  labs(title = "GO Terms Enriched in Sporozoite")
-
-# svglite("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_bubblePlot_barcode_Day2.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 7, width = 11.5)
-d2_up + bc1 + 
-  plot_layout(design = layout) 
-# dev.off()
-
-# svglite("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_bubblePlot_barcode_SPZ.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 7, width = 11.5)
-d2_down + bc2 + 
-  plot_layout(design = layout)
-# dev.off()
-```
-
-```{r}
-purrr::map(unique(day2_go_clean$ontology), function(ont, df){
-  df <- day2_go_clean %>% 
-    filter(ontology==ont)
-  
-  pdf(paste0("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_",ont,"_bubblePlot.pdf"), height = 5, width = 8)
-  print(clusterProfiler_bubble_plots(df))
-  dev.off()
-})
-```
-
-### Time-course clusters 
-
-```{r}
-cluster_go <- purrr::map(names(gene_clusts_dfs), function(clust){
-  
-  gsea_input <- gene_clusts_dfs[[clust]] %>% 
-    pull(gene_id)
-  
-  cats <- unique(GO_annots$ontology)
-  go_enr_df <- purrr::map_dfr(cats, function(x){
-      input_go_cats <- GO_annots %>% 
-        dplyr::filter(ontology==x) %>%
-        dplyr::select(ID=go_id, gene=gene_id)
-      go_enr <- enricher(gene = gsea_input,
-                        TERM2GENE = input_go_cats,
-                        minGSSize = 5,
-                        maxGSSize = 600)
-      if(!is.null(go_enr)){
-        go_enr@result
-      }
-  })
-
-  go_enr_df <- go_enr_df %>%
-    mutate(cluster_number=clust) %>% 
-    left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
-    dplyr::select(ID,cluster_number, ontology:go_term_name,setSize=Count,
-           everything()) %>% 
-    dplyr::select(ID:go_term_name,pvalue,qvalue,
-                everything()) %>% 
-    dplyr::arrange(pvalue)
-
-  
-  return(go_enr_df)
-})
-
-names(cluster_go) <- names(gene_clusts_dfs)
-```
-
-```{r}
-sapply(cluster_go, dim)
-# lapply(cluster_go, head)
-```
-
-```{r}
-cluster_go_dfs <- bind_rows(cluster_go) %>% 
-  filter(qvalue < 0.2) %>% 
-  mutate(len=nchar(go_term_name)) %>% 
-  mutate(labels=case_when(
-    grepl("RNA polymerase", go_term_name) ~ gsub("RNA polymerase","RNApol",go_term_name),
-    grepl(".apurinic or apyrimidinic site.", go_term_name) ~ gsub(".apurinic or apyrimidinic site.","", go_term_name),
-    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1",go_term_name),
-    grepl("polyadenylation specificity factor complex", go_term_name) ~ gsub("polyadenylation specificity factor complex","CPSF", go_term_name),
-    grepl("calcium", go_term_name) ~ gsub("calcium-","Ca2+",go_term_name),
-    grepl("cellular protein", go_term_name) ~ gsub("cellular protein","", go_term_name),
-    grepl("-adenosylmethionine", go_term_name) ~ gsub("-adenosylmethionine","AMe",go_term_name),
-    TRUE ~ go_term_name
-  )) %>% 
-  dplyr::arrange(desc(len))
-
-head(cluster_go_dfs, n=20)
-table(cluster_go_dfs$cluster_number)
-# write.csv(cluster_go_dfs, "GO_enrichment/time_course_clusters_clusterProfiler_allOntology.csv", row.names = FALSE)
-```
-
-```{r}
-cluster_go_dfs %>% 
-  group_by(cluster_number) %>% 
-  mutate(FDR_sig_result=p.adjust < 0.2) %>% 
-  group_by(FDR_sig_result, .add=TRUE) %>% 
-  dplyr::count()  %>% 
-  ungroup() %>% 
-  pivot_wider(names_from = FDR_sig_result,
-              values_from = n) %>% 
-  rename_at(c("FALSE","TRUE"), ~c("GO_terms_qvalue>0.2","GO_terms_qvalue<0.2"))  %>% 
-  left_join(., data.frame(Genes_in_Cluster=gene_clusts_dfs %>% 
-                            sapply(., nrow)) %>% 
-              rownames_to_column("cluster_number"), 
-            by="cluster_number") 
- 
-# write.csv(.,"GO_enrichment/time_course_clusters_clusterProfiler_SigResults_Summary.csv", row.names = FALSE)
-```
-
-```{r}
-p <- purrr::map(names(cluster_go), function(clust){
-  df <- cluster_go_dfs %>% 
-    filter(cluster_number == clust) %>% 
-    filter(ontology != "N/A", qvalue < 0.2) %>% 
-    mutate(setSize=as.integer(setSize)) %>% 
-    dplyr::arrange(pvalue)
-  
-    svglite(paste0("figures/combat_seq/bubble_plots/",clust,"_ClusterProfiler_bubblePlot.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 8)
-    print(clusterProfiler_bubble_plots(df,pval_column = "pvalue",label = "labels", Filter=FALSE) +
-      plot_annotation(title = paste0("Timecourse Cluster ",clust)))
-    dev.off()
-})
-```
-
-```{r}
-top_paths <- cluster_go_dfs %>% 
-   mutate(neg_log10_q=-log10(qvalue),
-          neg_log10_p=-log10(pvalue)) %>% 
-  group_by(cluster_number) %>% 
-  dplyr::filter( qvalue < 0.2 ) %>% 
-  # filter(p.adjust < 0.05 | pvalue < 0.05) %>% 
-  dplyr::arrange(desc(neg_log10_q), .by_group = TRUE) %>% 
-  dplyr::slice(1:10) %>% 
-  ungroup() %>% 
-  dplyr::filter(ontology != "N/A") %>% 
-  mutate(ID=factor(ID, levels=unique(ID)),
-         text_color=case_when(
-           ontology=="Cellular_Component" ~ "green4",
-           ontology=="Biological_Process" ~ "tomato2",
-           TRUE ~ "dodgerblue"
-         ))
-
-# dim(top_paths)
-head(top_paths)
-# table(duplicated(top_paths$ID))
-# table(top_paths$text_color)
-table(top_paths$cluster_number)
-```
-
-```{r fig.width=12, fig.height=6}
- bubble_plot <- ggplot(top_paths, aes(x=neg_log10_p, y=ID)) +
-      geom_point(aes(size=setSize, fill=ID), shape=21,
-                 alpha=0.8) +
-      scale_radius(range=c(2,10)) +
-      labs(x="-log10(p-value)", y="") +
-      scale_y_discrete(expand = c(0.05,0.05)) +
-      scale_x_continuous(expand = c(0.05,0.05)) +
-  
-      theme(panel.grid.major.x = element_blank(),
-            axis.text.y = element_text(color=top_paths$text_color),
-            panel.grid.minor.x = element_blank(),
-            panel.grid.major = element_line(color="black",size = 0.1),
-            panel.background = element_rect(fill="white"),
-            panel.border = element_rect(color="black", fill=NA)) +
-      guides(fill="none",
-             size=guide_legend(title = "Number of Genes",
-                               size = 1)
-             ) +
-      theme(legend.position = "left",
-            legend.key = element_rect(colour = NA, fill = NA))
-
-
-# svglite("figures/combat_seq/bubble_plots/time_course_facet_plot_allOntology.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), width = 15, height = 7)
-bubble_plot +
-  facet_wrap(~cluster_number, scales = 'free', ncol = 5)
-# dev.off()
-```
-
-
-### Combined Clusters 
-
-```{r}
-# gene_clusts_combined_dfs
-```
-
-```{r}
-cluster_go_combined <- purrr::map(names(gene_clusts_combined_dfs), function(clust){
-  
-  gsea_input <- gene_clusts_combined_dfs[[clust]] %>% 
-    pull(gene_id)
-  
-  cats <- unique(GO_annots$ontology)
-  go_enr_df <- purrr::map_dfr(cats, function(x){
-      input_go_cats <- GO_annots %>% 
-        dplyr::filter(ontology==x) %>%
-        dplyr::select(ID=go_id, gene=gene_id)
-      go_enr <- enricher(gene = gsea_input,
-                        TERM2GENE = input_go_cats,
-                        minGSSize = 5,
-                        maxGSSize = 600)
-      if(!is.null(go_enr)){
-        go_enr@result
-      }
-  })
-
-  go_enr_df <- go_enr_df %>%
-    mutate(cluster_number=clust) %>% 
-    left_join(., GO_descriptions, by=c("ID"="go_id")) %>%
-    dplyr::select(ID,cluster_number, ontology:go_term_name,setSize=Count,
-           everything()) %>% 
-    dplyr::select(ID:go_term_name,pvalue,qvalue,
-                everything()) %>% 
-    dplyr::arrange(pvalue)
-
-  
-  return(go_enr_df)
-})
-
-names(cluster_go_combined) <- names(gene_clusts_combined_dfs)
-```
-
-```{r}
-cluster_go_combined$Profile1 %>% 
-  filter(is.na(qvalue))
-```
-
-```{r}
-sapply(cluster_go_combined, dim)
-lapply(cluster_go_combined, head)
-
-# sapply(cluster_go_combined, function(x) table(x$qvalue < 0.05))
-```
-
-```{r}
-cluster_go_combined_dfs <- bind_rows(cluster_go_combined) %>% 
-  filter(qvalue < 0.2) %>% 
-  mutate(len=nchar(go_term_name)) %>% 
-  mutate(labels=case_when(
-    grepl("RNA polymerase", go_term_name) ~ gsub("RNA polymerase","RNApol",go_term_name),
-    grepl(".apurinic or apyrimidinic site.", go_term_name) ~ gsub(".apurinic or apyrimidinic site.","", go_term_name),
-    grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1",go_term_name),
-    grepl("polyadenylation specificity factor complex", go_term_name) ~ gsub("polyadenylation specificity factor complex","CPSF", go_term_name),
-    grepl("calcium", go_term_name) ~ gsub("calcium-","Ca2+",go_term_name),
-    grepl("cellular protein", go_term_name) ~ gsub("cellular protein","", go_term_name),
-    grepl("-adenosylmethionine", go_term_name) ~ gsub("-adenosylmethionine","AMe",go_term_name),
-    TRUE ~ go_term_name
-  )) %>% 
-  dplyr::arrange(desc(len))
-
-# head(cluster_go_combined_dfs)
-
-# write.csv(cluster_go_combined_dfs, "GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_allOntology.csv", row.names = FALSE)
-```
-
-```{r}
-table(cluster_go_dfs$cluster_number)
-table(cluster_go_combined_dfs$cluster_number)
-table(time_course$gene_cluster_factor, time_course$combined_gene_clusters)
-```
-
-```{r}
-p <- purrr::map(names(cluster_go_combined), function(clust){
-  df <- cluster_go_combined_dfs %>% 
-    filter(cluster_number == clust) %>% 
-    filter(ontology != "N/A", qvalue < 0.2) %>% 
-    mutate(setSize=as.integer(setSize)) %>% 
-    dplyr::arrange(pvalue)
-  
-    svglite(paste0("figures/combat_seq/bubble_plots/",clust,"_ClusterProfiler_bubblePlot.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = 8)
-    print(clusterProfiler_bubble_plots(df,pval_column = "pvalue",label = "labels", Filter=FALSE) +
-      plot_annotation(title = paste0("Timecourse Cluster ",clust)))
-    dev.off()
-})
-```
-
-
-## TopGO 
-
-https://bioconductor.org/packages/devel/bioc/vignettes/topGO/inst/doc/topGO.pdf
-
-```{r}
-#  loaded three environments GOBPTerm, GOMFTerm and GOCCTerm
-suppressPackageStartupMessages(library(topGO))
-```
-
-topGO_2.46.0 (current 2.5.0, but how current are the GO annots themselves??)
-
-```{r}
-go_terms_avail <- c(ls(GOBPTerm),ls(GOMFTerm),ls(GOCCTerm))
-# length(go_terms_avail)
-# length(unique(go_terms_avail))
-table(unique(GO_annots$go_id) %in% go_terms_avail)
-missing <- unique(setdiff(GO_annots$go_id, go_terms_avail)) #46 missing 
-
-GO_annots %>% 
-  filter(go_id %in% missing) %>%
-  dplyr::select(ontology, go_id) %>% 
-  distinct() %>% 
-  arrange(ontology) 
-
-length(unique(GO_annots$gene_id)) #4,868
-length(unique(GO_annots$go_id)) #3230
-
-table(gene_clusts_dfs$cluster8$gene_id %in% unique(GO_annots$gene_id))
-table(all_genes %in% unique(GO_annots$gene_id))
-```
-
-```{r}
-gene2GO <- GO_annots %>% pull(go_id,name=gene_id)
-
-topGO_eset <- cb_eset
-masigpro_id <- pData(topGO_eset) %>% 
-  group_by(time_point) %>% 
-  mutate(masigpro_id=paste("Pf",  time_point, 
-                           paste0("Rep", 1:n()), sep="_")) %>% 
-  ungroup() %>% 
-  pull(masigpro_id)
-
-pData(topGO_eset)$masigpro_id <- masigpro_id
-colnames(topGO_eset) <- masigpro_id
-topGO_eset <- topGO_eset[,!grepl("Day2", colnames(topGO_eset))]
-```
-
-```{r}
-all_genes <- fData(topGO_eset) %>% pull(gene_id)
-gene_list <- as.numeric(all_genes %in% gene_clusts_dfs$cluster8$gene_id , 1,0) %>% 
-  as.factor() %>% 
-  set_names(all_genes)
-
-# table(gene_list)
-
-godata_BP <- new("topGOdata", 
-              ontology = c("BP"), 
-              nodeSize = 5,
-              allGenes = gene_list,
-              annot = annFUN.gene2GO, 
-              gene2GO = gene2GO)
-
-# godata_BP
-```
-
-
-```{r}
-whichTests()
-whichAlgorithms()
-```
-
-## goseq
-
-```{r}
-library(goseq)
-library(GenomicRanges)
-conflicted::conflict_prefer("select", "dplyr")
-conflicted::conflict_prefer("filter", "dplyr")
-conflicted::conflict_prefer("mutate", "dplyr")
-```
-
-```{r message=FALSE}
-edb <- ensembldb::EnsDb("species_genomes/GRCh38_GRCm39_Pf3D7v58.sqlite")
-edb
-```
-
-```{r}
-genes_gr <- ensembldb::genes(edb)[rownames(cb_se),]
-genes_gr %>%  head()
-# length(genes_gr) #5188
-
-gene_lens <- width(genes_gr) %>% 
-  set_names(names(genes_gr))
-```
-
-```{r}
-all_genes <- rownames(cb_se)
-gene_list <- as.numeric(all_genes %in% gene_clusts_dfs$cluster8$gene_id , 1,0) %>% 
-  as.factor() %>% 
-  set_names(all_genes)
-
-table(gene_list)
-```
-
-```{r}
-supportedGenomes() %>% 
-  filter(grepl("mal|plas|fal", species, ignore.case = T) | 
-           grepl("PF", db, ignore.case = TRUE))
-# supportedOrganisms()
-supportedGeneIDs() %>%  head()
-```
-
-Warning: initial point very close to some inequality constraintsWarning: collapsing to unique 'x' values
-
-```{r}
-GO_annots_clean <- GO_annots %>% 
-  group_by(ontology,go_id) %>% 
-  dplyr::mutate(n_genes = n())  %>% 
-  ungroup() %>% 
-  select(gene_id:go_id, n_genes) %>% 
-  dplyr::arrange(ontology, go_id,n_genes) %>% 
-  dplyr::filter(n_genes >= 5, n_genes <= 1000)
-
-GO_annots_clean %>% 
-  select(ontology, go_id) %>% 
-  distinct() %>% 
-  group_by(ontology) %>% 
-  dplyr::count()
-```
-
-```{r}
-GO_annots %>% 
-  filter(ontology=="Biological Process") %>% 
-  select(gene=gene_id,go_id)
-```
-
-
-```{r}
-input_go <- 
-  GO_annots_clean %>%
-  filter(ontology=="Biological Process") %>% 
-  dplyr::arrange(gene_id) %>% 
-  select(gene=gene_id,go_id) %>% 
-  as.data.frame()
-
-
-pwf <- nullp(DEgenes = gene_list, 
-             genome = "PF3D7",
-             id = "ensGene",
-             bias.data = gene_lens)
-```
-
-```{r}
-go_res <- goseq(pwf, 
-                genome = "PF3D7",
-                id = "ensGene",
-                gene2cat = input_go, 
-                method = "Wallenius",
-                # method = "Sampling",
-                repcnt = 2000,
-                use_genes_without_cat = F)
-```
-
-Error: node stack overflow
-Error during wrapup: node stack overflow
-Error: no more error handlers available (recursive errors?); invoking 'abort' restart
-
-```{r}
-go_res_clean <- go_res %>% 
-  as.data.frame() %>% 
-  dplyr::mutate(p_adj = p.adjust(p = as.numeric(over_represented_pvalue),
-                                 method = "BH")) %>% 
-  dplyr::select(category, p_adj, everything())
-
-# quantile(go_res_clean$p_adj)
-go_res_clean
-```
-
-
-## PlasmoDB 
-
-```{r}
-Day2 <- read.csv("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv", comment.char = "#")
-
-Day2 %>%
-  dplyr::filter(logFC > 0) %>%
-  pull(gene_id) %>%
-  write.table(.,"GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
-              sep="\t", quote=FALSE, row.names = FALSE)
-
-Day2 %>%
-  dplyr::filter(logFC < 0) %>%
-  pull(gene_id) %>% 
-  write.table(.,"GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
-              sep="\t", quote=FALSE, row.names = FALSE)
-
-sigs_all_df_d456 <-  read.csv("time_course/masigpro/masigpro_significant_genes_d456_results.csv") %>% 
-  rename_at(vars(X), ~c("gene_id"))
-
-gene_clusts_dfs <- purrr::map(unique(sigs_all_df_d456$gene_cluster), function(clust){
-  out <- here::here(file.path("GO_enrichment",paste0("cluster",clust)))
-  dir.create(out,recursive = T, showWarnings = FALSE)
-  
-  sigs_all_df_d456 %>%
-    dplyr::filter(gene_cluster==clust) %>% 
-    pull(gene_id) %>%
-    write.table(., file.path(out,
-                             paste0("Heps_Pf_vs_sporozorite_combat-seq_corrected_masigpro_cluster",clust, ".csv")),
-                sep="\t", quote=FALSE, row.names = FALSE)
-})
-```
-
-https://static-content.veupathdb.org/documents/GO-Enrichment.pdf
-
-```{r}
-# From PLASMODB GO analysis - need to find the GO terms themselves...
-res_path <- dir("GO_enrichment/",
-                recursive = TRUE,
-                pattern = ".tsv",
-                full.names = TRUE)
-res <- purrr::map(res_path, function(x) read.delim(x) %>% 
-                    janitor::clean_names())
-names(res) <- basename(res_path) %>% gsub("hiddenGoEnrichmentResult_|.tsv", "",.)
-lapply(res, head)
-```
-
-```{r}
-# BiocManager::install("org.Pf.plasmo.db", 
-#                      lib=.libPaths()[1])
-#org.Pf.plasmo.db is based on old data that are no longer updated. org.Pf.plasmo.db is deprecated and will be removed from Bioconductor version 3.15.
-# library(org.Pf.plasmo.db)
-# BiocManager::install("malaria.db0", lib=.libPaths()[1])
-```
-
-```{r}
-create_bubble_plots <- function(df){
-  
-    input <- df %>% 
-      mutate(neg_log10_P=-log10(p_value),
-             log2_FC=log2(fold_enrichment+1)) %>% 
-      arrange(benjamini)
-    
-    temp <- input %>% 
-      dplyr::filter(benjamini < 0.05) %>% 
-      mutate(id=factor(id, levels = rev(id)))
-  
-    if(nrow(temp) == 0){
-      temp <- input %>% 
-        mutate(id=factor(id, levels = rev(id)))
-    }
-    
-    n <- min(20,nrow(temp))
-    temp <- temp %>%  
-      dplyr::slice(1:n)
-    
-    bubble_plot <- ggplot(temp, aes(x=neg_log10_P, y=id)) +
-      geom_point(aes(size=result_count, fill=id), shape=21,
-                 alpha=0.8) +
-      scale_radius(range=c(1,10)) +
-      labs(x="-log10(p-value)", y="") +
-      scale_y_discrete(expand = c(0.05,0)) +
-      theme(panel.grid.major.x = element_blank(),
-            panel.grid.minor.x = element_blank(),
-            panel.grid.major = element_line(color="black",size = 0.1),
-            panel.background = element_rect(fill="white"),
-            panel.border = element_rect(color="black", fill=NA)) +
-      guides(fill="none",
-             # size="none",
-             size=guide_legend(title = "Number of DEGs with GO Term",
-                               size = 1)
-             ) +
-      theme(legend.position = "left",
-            legend.key = element_rect(colour = NA, fill = NA))
-
-    # return(bubble_plot)
-    tab <-  ggplot(temp, aes(x = 0, y = id, label=name)) +
-        geom_text(size = 3,
-                  hjust = 0,
-                  nudge_x = 0)  +
-
-        scale_y_discrete(expand = c(0.05,0)) +
-        scale_x_continuous(expand = expansion(mult = c(0,1e2))) +
-        coord_cartesian(clip="off",
-                        xlim=c(0, 500)) +
-        theme_void()
-
-    return(bubble_plot +
-      tab + 
-      plot_layout(widths = c(1, 2.5), guides='collect') &
-      theme(legend.position='top'))
-}
-```
-
-```{r fig.height=5, fid.width=10}
-purrr::map(names(res),function(df_ID){ 
-  svglite(paste0("kappe_s_",df_ID,"_bubbleplot.svg"), height = 5, width = 10)
-  print(create_bubble_plots(res[[df_ID]]))
-  dev.off()
-})
-
-# tab
-```
 
 
 # Share the Data
 
 ```{bash}
 destination="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/"
-#rsync -av --exclude .DS_Store --exclude degree1 time_course/masigpro $destination
-#rsync -av --exclude .DS_Store figures $destination 
-#rsync -av --exclude .DS_Store --exclude plasmoDB --exclude PlasmoDB GO_enrichment  $destination
-rsync -av --exclude .DS_Store motif_analysis --exclude results_jaspar2020_db --exclude outfiles $destination
+./rsync.sh
 ```
 
 
