@@ -657,7 +657,7 @@ head(proteins_aa)
 length(proteins_aa) #5389
 
 # names(proteins_aa) <- gsub("^(PF3D7.+p[0-9])\\s.+","\\1",names(proteins_aa))
-# Biostrings::writeXStringSet(proteins_aa, "cvgs_pexel_domains/PF3D7_full_length_protein.fasta")
+# Biostrings::writeXStringSet(proteins_aa, "results/cvgs_pexel_domains/PF3D7_full_length_protein.fasta")
 ```
 ```{r}
 cds_fasta <- Biostrings::readDNAStringSet("species_genomes/plasmoDB/PlasmoDB-58_Pfalciparum3D7_AnnotatedCDSs.fasta")
@@ -758,13 +758,13 @@ dim(cvg_expn)
 # cvgs %>% 
 #   group_by(type) %>% 
 #   dplyr::count() %>% 
-#   write.csv(.,"cvgs_pexel_domains/cvgs_counts_table.csv", row.names = F)
+#   write.csv(.,"results/cvgs_pexel_domains/cvgs_counts_table.csv", row.names = F)
 
 cvgs %>%
   filter(gene_id %in% rownames(cvg_expn)) %>%
   group_by(type) %>%
   dplyr::count() 
-#   write.csv(., "cvgs_pexel_domains/cvgs_counts_table_filtered_by_expression.csv", row.names = F)
+#   write.csv(., "results/cvgs_pexel_domains/cvgs_counts_table_filtered_by_expression.csv", row.names = F)
 
 missing <- dplyr::setdiff(cvgs$gene_id, rownames(cvg_expn))
 # length(missing)
@@ -779,7 +779,7 @@ missing_raw_counts <- counts %>%
             median=median(counts), 
             sd=sd(counts))
 
-# write.csv(missing_raw_counts,"cvgs_pexel_domains/missing_raw_counts_summary.csv", row.names = FALSE)
+# write.csv(missing_raw_counts,"results/cvgs_pexel_domains/missing_raw_counts_summary.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -793,9 +793,23 @@ cvg_expn_long <- cvg_expn %>%
   left_join(., cvgs, by=c("gene_id")) %>%
   select(gene_id:log2TPM, type, product, everything())
 
-# cvg_expn_long
+cvg_expn_long
 # table(cvg_expn_long$type)
 ```
+
+```{r}
+cvg_expn_summary_stats <- cvg_expn_long  %>% 
+  group_by(product, gene_id, analysis_factor_group) %>% 
+  summarise(min = min(log2TPM),
+            median = median(log2TPM),
+            mean = mean(log2TPM),
+            max = max(log2TPM),
+            sd = sd(log2TPM)) %>% 
+  rename_at(vars(min:sd), ~paste0(.,"_log2TPM"))
+
+# write.csv(cvg_expn_summary_stats,"results/cvgs_pexel_domains/CVG_gene_expression_summary_table.csv", row.names = FALSE)
+```
+
 
 ```{r eval=FALSE}
 # Day 6 boxplots
@@ -939,7 +953,7 @@ pexel_motifs <- data.frame(type=c("Canonical", rep("non-canonical",5)),
            gsub("[-\\.\\/]","", .))
 
 pexel_motifs
-# write.csv(pexel_motifs, "cvgs_pexel_domains/pexel_motifs.csv", row.names = FALSE)
+# write.csv(pexel_motifs, "results/cvgs_pexel_domains/pexel_motifs.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -961,7 +975,7 @@ short_100aa <- nterm_150aa[!ok_100_len] %>%
   narrow(., start = 1, width = trimmed_aa_lens[!ok_100_len]) 
 nterm_100aa <- c(nterm_100aa, short_100aa)
 names(nterm_100aa) <- gsub("^(PF3D7.+p[0-9])\\s.+","\\1",names(nterm_100aa))
-# Biostrings::writeXStringSet(nterm_100aa, filepath = "cvgs_pexel_domains/PF3D7_100aa_nterm_protein.fasta")
+# Biostrings::writeXStringSet(nterm_100aa, filepath = "results/cvgs_pexel_domains/PF3D7_100aa_nterm_protein.fasta")
 ```
 
 ```{r eval=FALSE}
@@ -974,7 +988,7 @@ pexel_hits <- purrr::map(.x = pexel_motif_patterns,
 lapply(pexel_hits, head)
 lapply(pexel_hits, dim)
 
-# saveRDS(pexel_hits,"cvgs_pexel_domains/pexel_motif_search_150aa_results_list.RDS")
+# saveRDS(pexel_hits,"results/cvgs_pexel_domains/pexel_motif_search_150aa_results_list.RDS")
 
 
 new_col_names <- lapply(pexel_motifs$motif_name, 
@@ -984,11 +998,11 @@ new_col_names <- lapply(pexel_motifs$motif_name,
 pexel_hits_all <- purrr::reduce(pexel_hits, left_join, by="aa_name") %>%
   rename_at(vars(matches("match|position")), ~new_col_names)
 
-# write.csv(pexel_hits_all, "cvgs_pexel_domains/pexel_motif_search_150aa_results.csv")
+# write.csv(pexel_hits_all, "results/cvgs_pexel_domains/pexel_motif_search_150aa_results.csv")
 ```
 
 ```{r}
-pexel_hits_all <- read.csv("cvgs_pexel_domains/pexel_motif_search_150aa_results.csv", row.names = 1)
+pexel_hits_all <- read.csv("results/cvgs_pexel_domains/pexel_motif_search_150aa_results.csv", row.names = 1)
 
 
 head(pexel_hits_all)
@@ -1058,7 +1072,7 @@ pexel_hits_table <- purrr::map_dfr(.x = colnames(pexel_hits_bool[,-1]),
   mutate(total=nrow(pexel_hits_bool)) %>% 
   select(type, matches("true"), everything())
 
-# write.csv(pexel_hits_table, "cvgs_pexel_domains/pexel_motif_hits_150aa_summary_table.csv", row.names = F)
+# write.csv(pexel_hits_table, "results/cvgs_pexel_domains/pexel_motif_hits_150aa_summary_table.csv", row.names = F)
 ```
 
 ```{r}
@@ -1266,7 +1280,7 @@ pexel_summary_stats <- pexel_expn_long %>%
 
 
 pexel_summary_stats
-# write.csv(pexel_summary_stats, "cvgs_pexel_domains/pexel_motif_hits_150aa_expression_TPM.csv", row.names = FALSE)
+# write.csv(pexel_summary_stats, "results/cvgs_pexel_domains/pexel_motif_hits_150aa_expression_TPM.csv", row.names = FALSE)
 ```
 
 
@@ -1429,7 +1443,7 @@ Columns:
 
 
 ```{r}
-signalp_res <- read.delim("cvgs_pexel_domains/signalp6.0/prediction_results.txt", sep='\t', comment.char = "#", header = FALSE) %>% 
+signalp_res <- read.delim("results/cvgs_pexel_domains/signalp6.0/prediction_results.txt", sep='\t', comment.char = "#", header = FALSE) %>% 
   rename_all(~c("id","prediction_type","prob_other","prob_signal_pep","cleavage_site_position")) %>% 
   arrange(desc(prob_signal_pep)) %>% 
   mutate(gene_id=gsub("\\.[0-9]-p[0-9]$","", id), 
@@ -1439,14 +1453,14 @@ signalp_res <- read.delim("cvgs_pexel_domains/signalp6.0/prediction_results.txt"
 signalp_res %>% head()
 dim(signalp_res)
 # length(unique(signalp_res$gene_id))
-# write.csv(signalp_res,"cvgs_pexel_domains/signalp6.0/prediction_results_annotated.csv", row.names = FALSE)
+# write.csv(signalp_res,"results/cvgs_pexel_domains/signalp6.0/prediction_results_annotated.csv", row.names = FALSE)
 ```
 
 `output.gff3`
 The start and end positions of all predicted signal peptides in GFF3 format.
 
 ```{r}
-signalp_gtf <- rtracklayer::import("cvgs_pexel_domains/signalp6.0/output.gff3") %>% 
+signalp_gtf <- rtracklayer::import("results/cvgs_pexel_domains/signalp6.0/output.gff3") %>% 
   as.data.frame() %>% 
   mutate(seqnames=gsub("\\-",".", seqnames)) %>% 
   arrange(desc(score)) %>% 
@@ -1498,7 +1512,7 @@ diff <- comparison_signalP %>%
          id:cleavage_site_position_signalPv6.0)
 
 # diff
-# write.csv(diff,"cvgs_pexel_domains/PF3D7_signalPv3.0_vs_signalPv6.0.csv", row.names = F)
+# write.csv(diff,"results/cvgs_pexel_domains/PF3D7_signalPv3.0_vs_signalPv6.0.csv", row.names = F)
 ```
 
 # Integrate SignalP and TM domains
@@ -1527,7 +1541,7 @@ signalp_pexel_results <- signalp_pexel_results %>%
 dim(signalp_pexel_results)
 length(unique(signalp_pexel_results$gene_id)) #35 gene_ids
 
-# write.csv(signalp_pexel_results, "cvgs_pexel_domains/canonical_pexel_motif_hits_150aa_signalP_hits_100aa_expression_TPM.csv", row.names = FALSE)
+# write.csv(signalp_pexel_results, "results/cvgs_pexel_domains/canonical_pexel_motif_hits_150aa_signalP_hits_100aa_expression_TPM.csv", row.names = FALSE)
 ```
 
 ### Non-canonical 
@@ -1581,7 +1595,7 @@ sapply(noncanon_pexel_signalp, function(x) length(unique(x$gene_id))) %>%
 
 ```{r}
 # lapply(names(noncanon_pexel_signalp), function(x) write.csv(noncanon_pexel_signalp[[x]],
-#   glue::glue("cvgs_pexel_domains/noncanonical_pexel_motif_{x}_hits_150aa_signalP_hits_100aa_expression_TPM.csv"), row.names = FALSE))
+#   glue::glue("results/cvgs_pexel_domains/noncanonical_pexel_motif_{x}_hits_150aa_signalP_hits_100aa_expression_TPM.csv"), row.names = FALSE))
 ```
 
 

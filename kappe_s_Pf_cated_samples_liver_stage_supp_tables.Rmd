@@ -39,6 +39,7 @@ library(glue)
 library(ggplot2)
 library(patchwork)
 
+library(openxlsx)
 
 # GRangs/annotationDBI override common dplyr functions, and conflicted Rpackage allows you to set a preferred function. 
 conflicted::conflict_prefer("select","dplyr")
@@ -48,15 +49,43 @@ conflicted::conflict_prefer("filter","dplyr")
 # Sample Manifests and Metadata
 
 ```{r}
+pvivax_manifest <- read.csv("samples/kappe_s_2022.08_pvivax_erika.pv.hypnozoites_sample_manifest.csv", row.names = 1) %>% 
+  filter(group != "PI4K") %>% 
+  mutate(analysis_factor_group = "pvivax",
+         analysis_group_id = paste0(analysis_factor_group, "_Rep", 1:nrow(.)),
+         RNA_label = sample_id,
+         batch = analysis_factor_group,
+         infection_status = "infected", 
+         to_concatenate = "No",
+         seq_chemistry = "Agilent SureSelect XT RNA Target Enrichment for Illumina Multiplexed Sequencing",
+         ) %>% 
+  mutate_at(vars(read1,read2), ~basename(.)) %>% 
+  rename_at(vars(read1,read2), ~paste(., "fastq", sep="_")) %>% 
+  select(sample_id, everything(), 
+         -seq_methods, -stage, -group, -description, -cell_type)
+
+head(pvivax_manifest)
+```
+
+```{r}
 manifest <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sample_manifest_7.25.2022.csv") %>% 
+  mutate(old_ids = gsub( "\\+", "", analysis_group_id)) %>% 
   mutate_at(vars(analysis_group_id), ~gsub("(^.+)(_Heps_)(S[0-9]).+", "\\1_Pf_LS_\\3", .) %>% 
               gsub("_S","_Rep", .)) %>%
   mutate(analysis_factor_group = gsub("_Heps_Pf", "_Pf_LS",analysis_factor_group)) %>% 
   mutate_at(vars(analysis_group_id, analysis_factor_group),
             ~gsub("sporozorite","sporozoite", .)) %>% 
-  select(sample_id_cat:analysis_group_id, analysis_factor_group, 
+  mutate_at(vars(tissue_source), ~gsub("infected ","", .)) %>% 
+  select(old_ids, 
+         sample_id=sample_id_cat,
+         analysis_group_id, analysis_factor_group, 
          everything(), 
-         -analysis_group)
+         -analysis_group) %>% 
+  bind_rows(pvivax_manifest) %>% 
+  mutate_at(vars(read_length), ~case_when(
+    grepl("SRR", sample_id) ~ "150bp",
+    TRUE ~ gsub("pb","bp", .)
+  )) 
 
 head(manifest)
 # dim(manifest)
@@ -67,22 +96,213 @@ table(manifest$analysis_group_id)
 table(manifest$analysis_factor_group)
 ```
 
+
 # Define Files to Update
 
 ```{r}
 paper_dir <- file.path("/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/Paper_Versions/Figures_layout")
 
 to_update <- basename(dir(paper_dir, pattern = "*.csv", recursive = TRUE)) %>% 
-  grep("Figure2_all_Genes|conversion_table", ., value=T, invert = T)
+  grep("Figure2_all_Genes|conversion_table|pexel", ., value=T, invert = T)
 
-to_update
+# to_update
+```
+
+NOTE - PEXEL analysis was completed by Eva Hesping @WEHI after I had completed some analyses. 
+
+```{r}
+cmds <- glue("find . -name {to_update} -not -path './references/*' -not -path './00_archive/*' ")
+file_locations <- purrr::map(cmds, function(cmd) system(cmd, intern = TRUE))
+names(file_locations) <- to_update
+
+file_locations <- file_locations[sapply(file_locations, length) != 0] %>% 
+  c(as.list(dir("expression_data", pattern = "(PF3D7|PVP01)_TPM", full.names = TRUE)) %>% 
+      set_names(sapply(., basename)))
+
+# file_locations
+```
+
+* NOTE - decided to not include this supplemental table 
+pfalciparum_day6_orthologs_TPM_01.17.2023.csv --> correspond to results/pvivax_vs_pfalciparum/pfalciparum_day6_orthologs_TPM.csv
+pvivax_day8_orthologs_TPM_01.17.2023.csv
+
+instead provide the whole TPM matrix for all samples 
+
+OUTDIR=references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables
+
+## Reformat Expression Data
+
+```{r}
+expn_files <- file_locations[grep("counts|CPM|TPM", names(file_locations))]
+# expn_files
 ```
 
 ```{r}
-cmds <- glue("find . -name {to_update} -not -path './references/*' ")
-file_locations <- purrr::map(cmds, function(cmd) system(cmd, intern = TRUE))
+expn_mats <- purrr::map(expn_files, read.csv)
 
-file_locations
+# lapply(expn_mats, head)
+# lapply(expn_mats, dim)
+```
+
+```{r}
+expn_mats_fixed <- purrr::map(expn_mats, function(df){
+  df <- df %>% 
+    rename_at(vars(matches("^X$|gene_name")), ~c("gene_id"))
+  
+  if(any(grepl("S[0-9]_", colnames(df)))){
+      rename_vect <- manifest %>%
+        filter(old_ids %in% colnames(df)) %>%
+        pull(old_ids, name = analysis_group_id)
+  }else{
+      rename_vect <- manifest %>%
+        filter(sample_id %in% colnames(df)) %>%
+        pull(sample_id, name = analysis_group_id)
+  }
+  df <- df %>%
+    select(gene_id, all_of(rename_vect))
+})
+
+names(expn_mats_fixed) <- gsub("kappe_s_|P[fv]HsMmu_|cated_samples_|.csv", "", names(expn_mats)) #
+# expn_mats_fixed
+```
+
+```{r}
+expn_wb <- createWorkbook()
+purrr::map(names(expn_mats_fixed), function(x){
+  
+  addWorksheet(expn_wb, sheetName = x, gridLines = TRUE)
+  writeData(expn_wb, 
+            sheet = x,
+            x = expn_mats_fixed[[x]], 
+            startCol = 1, startRow = 5, 
+            colNames=TRUE)
+  
+})
+saveWorkbook(expn_wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_expression_data.xlsx", overwrite = TRUE)
+```
+
+
+## Reformat GO Tables
+
+```{r}
+go_files <- file_locations[grep("ClusterProfiler|go", names(file_locations), ignore.case = TRUE)]
+
+go_res <- purrr::map(go_files, read.csv)
+names(go_res) <- gsub("_[Cc]lusterProfiler_[Aa]ll.+csv", "", names(go_res)) %>% 
+  gsub("clusters_combinedProfiles","profiles", .) %>% 
+  gsub("orthologs_go","pvivax_vs_pfalciparum_orthologs", .)
+
+lapply(go_res, head)
+```
+
+```{r}
+go_res_fixed <- purrr::map(go_res, function(df){
+  df %>% 
+    janitor::clean_names()
+})
+
+lapply(go_res_fixed, head)
+
+go_wb <- createWorkbook()
+purrr::map(names(go_res_fixed), function(x){
+  
+  addWorksheet(go_wb, sheetName = x, gridLines = TRUE)
+  writeData(go_wb, 
+            sheet = x,
+            x = go_res_fixed[[x]], 
+            startCol = 1, startRow = 5, 
+            colNames=TRUE)
+  
+})
+saveWorkbook(go_wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_gene_ontology_enrichment.xlsx", overwrite = TRUE)
+```
+
+## Reformat Motif Results 
+
+```{r}
+motif_files <- file_locations[grep("monaLisa|jaspar2022|ap2|time_course_profiles_orthologs_result|time_course_orthologs_results", names(file_locations))]
+
+motif_files <- c(motif_files[grep("jaspar2022_orthologs.csv", names(motif_files))],
+                 motif_files[grep("jaspar2022_orthologs.csv", names(motif_files), invert = TRUE)])
+
+
+motif_res <- purrr::map(motif_files, read.csv)
+motif_res[["time_course_profiles_ap2_withTranscriptIDs_results.csv"]] <- select(motif_res$time_course_profiles_ap2_withTranscriptIDs_results.csv,
+                                                                                motif, gene_cluster=combined_gene_clusters, everything())
+
+names(motif_res) <- names(motif_files) %>% 
+  gsub("_withTranscriptIDs|_monaLisa|_results|.csv", "", .) %>% 
+  ifelse(grepl("jaspar2022", .),.,  paste(., "motifs", sep = "_"))
+
+
+lapply(motif_res, head)
+```
+
+```{r}
+motif_res_fixed <- c(motif_res_fixed[1],
+                     list("day2_vs_spz" = bind_rows(motif_res[grep("day2", names(motif_res))])),
+                     list("time_course_clusters"=bind_rows(motif_res[grep("time_course_[oa]", names(motif_res))])), 
+                     list("time_course_profiles"=bind_rows(motif_res[grep("time_course_profiles", names(motif_res))]))
+                     ) 
+
+# lapply(motif_res_fixed, head)
+
+motif_res_fixed <- purrr::map(motif_res_fixed, function(df){
+  df %>% 
+    janitor::clean_names()
+})
+
+
+motif_wb <- createWorkbook()
+purrr::map(names(motif_res_fixed), function(x){
+
+  addWorksheet(motif_wb, sheetName = x, gridLines = TRUE)
+  writeData(motif_wb,
+            sheet = x,
+            x = motif_res_fixed[[x]],
+            startCol = 1, startRow = 5,
+            colNames=TRUE)
+
+})
+saveWorkbook(motif_wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_motif_enrichment.xlsx", overwrite = TRUE)
+```
+
+## Reformat DEGs
+
+```{r}
+# file_locations # only contains day2 
+deg_files <- dir("results/DEGs", pattern = "Day[0-9]_.+corrected_DEGs.csv", full.names = TRUE)
+names(deg_files) <- gsub("kappe_s_|_combat-seq_corrected|.csv","",basename(deg_files)) %>% 
+  gsub("sporozorite","sporozoite", .)
+
+degs_res <- purrr::map(deg_files, read.delim, comment.char = "#", sep = ",")
+```
+
+```{r}
+degs_res_fixed <- purrr::map(degs_res, function(df){
+  df %>% 
+    janitor::clean_names()
+})
+
+degs_wb <- createWorkbook()
+purrr::map(names(degs_res_fixed), function(x){
+
+  addWorksheet(degs_wb, sheetName = x, gridLines = TRUE)
+  writeData(degs_wb,
+            sheet = x,
+            x = degs_res_fixed[[x]],
+            startCol = 1, startRow = 5,
+            colNames=TRUE)
+
+})
+saveWorkbook(degs_wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_differential_expression_analysis.xlsx", overwrite = TRUE)
+```
+
+
+## Reformat CVGs
+
+```{r}
+
 ```
 
 

@@ -591,6 +591,19 @@ clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
 }
 ```
 
+# Background 
+
+FRG huHep infection, liver extraction and RNA extraction
+
+All animal procedures were conducted in accordance with and approved by the Center for Infectious Disease Research Institutional Animal Care and Use Committee (IACUC). The Center for the Infectious Disease Research adheres to the NIH Office of Laboratory Animal Welfare standards (OLAW welfare assurance #A3640-01). FRG huHep mice were infected intravenously through the tail vein with sporozoites isolated from the salivary glands of infected mosquitoes. Sporozoites inocula were suspended in 100 µl of RPMI media. Mice were euthanized and livers were perfused with PBS through the hepatic portal vein, removed, and separated into lobes. Each lobe was cut into two sections and one was reserved for IFA and one was reserved for RNA extraction. Lobes used for RNA extraction were pooled and added to TRIzol reagent (Invitrogen). Pooled liver lobes were homogenized in Trizol reagent and RNA was extracted using the Rneasy purification kit (Qiagen).
+
+
+RNA capture and sequencing library preparation
+
+A SureSelect XT custom oligo library was designed with Agilent (Design ID: S0782852) to enrich for P. vivax specific cDNA among the pool of human, mouse and parasite cDNA obtained from the RNA extraction from the humanized mouse liver. 85,000 120 bp probes were tiled every 100bp across the entire P. vivax Sal I genome. Sequences >30% similar to human sequences were excluded. Sequencing libraries were prepared according to the SureSelect XT RNA Target Enrichment for Illumina Multiplexed Sequencing protocol from Agilent (Ref: 5190-4393). Libraries were analyzed using a BioAnalyzer and were quantified using qPCR.
+
+
+
 # Data locations
 
 ```{bash eval=FALSE}
