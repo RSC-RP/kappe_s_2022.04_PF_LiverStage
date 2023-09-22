@@ -302,7 +302,22 @@ saveWorkbook(degs_wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplem
 ## Reformat CVGs
 
 ```{r}
+cvg_res <- read.csv("results/cvgs_pexel_domains/CVG_gene_expression_summary_table.csv")  %>% 
+  filter(!grepl("sporozoites", analysis_factor_group))
 
+head(cvg_res)
+dim(cvg_res)
+```
+
+```{r}
+cvg_wb <- createWorkbook()
+addWorksheet(cvg_wb, sheetName = "cvg_expression", gridLines = TRUE)
+writeData(cvg_wb,
+          sheet = "cvg_expression",
+          x = cvg_res,
+          startCol = 1, startRow = 5,
+          colNames=TRUE)
+saveWorkbook(cvg_wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_cvg_expression_summary_stats.xlsx", overwrite = TRUE)
 ```
 
 
