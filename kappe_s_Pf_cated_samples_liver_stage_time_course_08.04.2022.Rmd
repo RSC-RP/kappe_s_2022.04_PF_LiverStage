@@ -821,7 +821,7 @@ dim(GO_annots) #37,841    11
 ```
 
 ```{r}
-orthoMCL <- read.delim("motif_analysis/homer/groups_OrthoMCL-6.14.txt", 
+orthoMCL <- read.delim("results/motif_analysis/homer/groups_OrthoMCL-6.14.txt", 
                        header = FALSE) %>% 
   separate(V1, into=c("ortholog_group","accession"), 
            sep=": ", remove=FALSE) %>% 
@@ -912,7 +912,6 @@ head(ap2_ids)
 dim(ap2_ids)
 ```
 
-
 ```{r}
 conflicted::conflict_prefer("filter","dplyr")
 conflicted::conflict_prefer("select","dplyr")
@@ -920,6 +919,7 @@ conflicted::conflict_prefer("arrange","dplyr")
 conflicted::conflict_prefer("mutate","dplyr")
 conflicted::conflict_prefer("intersect","base")
 ```
+
 
 # TrendCatcher
 
@@ -939,7 +939,7 @@ Also, its very specific to human or mouse datasets, without any option to build 
 ```
 
 ```{r}
-# dir.create("time_course")
+# dir.create("results/time_course")
 
 newIDs <- colData(cb_se) %>% 
   as_tibble() %>%
@@ -971,7 +971,7 @@ counts <- as.data.frame(assay(cb_se,"raw_counts")[,newIDs$sample_id_cat]) %>%
   
 # counts
 # nrow(assay(cb_se,"raw_counts")) - nrow(counts)
-# write.csv(counts, "time_course/trendCatcher_counts.csv", row.names = FALSE)
+# write.csv(counts, "results/time_course/trendCatcher_counts.csv", row.names = FALSE)
 ```
 3 genes unique expressed only in the heps samples:
 
@@ -994,7 +994,7 @@ PF3D7_API02200
 
 ```{r eval=FALSE}
 #Running time is ~1 min  
-tc_res <- run_TrendCatcher(count.table.path = "time_course/trendCatcher_counts.csv",
+tc_res <- run_TrendCatcher(count.table.path = "results/time_course/trendCatcher_counts.csv",
                               baseline.t = 0,
                               time.unit = "day",
                               min.low.count = 1,
@@ -1002,7 +1002,7 @@ tc_res <- run_TrendCatcher(count.table.path = "time_course/trendCatcher_counts.c
                               dyn.p.thres = 0.001, #threshold of adjusted p-value
                               show.verbose = FALSE)
 # 
-# saveRDS(tc_res, "time_course/trendCatcher_day0456_results.RDS")
+# saveRDS(tc_res, "results/time_course/trendCatcher_day0456_results.RDS")
 ```
 
 ```{r}
@@ -1112,8 +1112,8 @@ pf_design <- make.design.matrix(dplyr::select(design_input,Time:Group),
                                 degree = 1)
 
 # Could use edgeR to define theta, rather than using the default value
-fit <- readRDS("time_course/masigpro/degree1/masigpro_fit_p.vector_D2456.RDS")
-tstep <- readRDS("time_course/masigpro/degree1/masigpro_tstep_D2456.RDS")
+fit <- readRDS("results/time_course/masigpro/degree1/masigpro_fit_p.vector_D2456.RDS")
+tstep <- readRDS("results/time_course/masigpro/degree1/masigpro_tstep_D2456.RDS")
 
 # fit <- p.vector(expression, pf_design,
 #                 counts=TRUE,
@@ -1125,8 +1125,8 @@ tstep <- readRDS("time_course/masigpro/degree1/masigpro_tstep_D2456.RDS")
 # tstep <- T.fit(fit,
 #                step.method = "backward")
 
-# saveRDS(tstep,"time_course/masigpro_tstep_D2456.RDS")
-#  saveRDS(fit,"time_course/masigpro_fit_p.vector_D2456.RDS")
+# saveRDS(tstep,"results/time_course/masigpro/masigpro_tstep_D2456.RDS")
+#  saveRDS(fit,"results/time_course/masigpro/masigpro_fit_p.vector_D2456.RDS")
 ```
 
 > fit$i # returns the number of significant genes
@@ -1312,21 +1312,21 @@ fit_d456  <- p.vector(expression[,rownames(input_d456)],
 tstep_d456  <- T.fit(fit_d456, step.method = "backward")
 
 
-# saveRDS(fit_d456,"time_course/masigpro_fit_p.vector_degree2_D456.RDS")
-# saveRDS(tstep_d456,"time_course/masigpro_tstep_degree2_D456.RDS")
+# saveRDS(fit_d456,"results/time_course/masigpro/masigpro_fit_p.vector_degree2_D456.RDS")
+# saveRDS(tstep_d456,"results/time_course/masigpro/masigpro_tstep_degree2_D456.RDS")
 ```
 
 "Influence: 85 genes with influential data at slot influ.info. Model validation for these genes is recommended"
 
 ```{r}
-# fit_d456 <- readRDS("time_course/masigpro/masigpro_fit_p.vector_degree2_D456.RDS")
+# fit_d456 <- readRDS("results/time_course/masigpro/masigpro_fit_p.vector_degree2_D456.RDS")
 # fit_d456$p.vector %>% length()
 # fit_d456$p.vector %>% head()
 ```
 
 
 ```{r}
-tstep_d456 <- readRDS("time_course/masigpro/masigpro_tstep_degree2_D456.RDS")
+tstep_d456 <- readRDS("results/time_course/masigpro/masigpro_tstep_degree2_D456.RDS")
 
 ## This will obtain all sigificant genes regardless the Rsquared value.
 sigs_all_d456 <- get.siggenes(tstep_d456,
@@ -1379,13 +1379,13 @@ sigs_all_df_d456 <- bind_cols(c(sigs_all_d456$sig.genes[c(2,4)],
   arrange(gene_cluster_factor) %>% 
   
   group_by(gene_cluster_factor) %>% 
-  mutate(gene_cluster_renamed=paste0("cluster",group_indices())) %>% 
+  mutate(gene_cluster_renamed=paste0("cluster",cur_group_id())) %>% 
   ungroup() %>% 
   
   dplyr::select(gene_id,matches("gene_cluster"), everything())
 
 
-# dim(sigs_all_df_d456) 
+dim(sigs_all_df_d456) #1510   26
 head(sigs_all_df_d456)
 
 
@@ -1393,7 +1393,7 @@ head(sigs_all_df_d456)
 #       sigs_all_df_d456$gene_cluster_factor)
 
 
-# write.csv(sigs_all_df_d456, "time_course/masigpro_significant_genes_degree2_d456_results.csv", row.names = TRUE)
+# write.csv(sigs_all_df_d456, "results/time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv", row.names = TRUE)
 ```
 
 ### Expression plots
@@ -1714,14 +1714,13 @@ Profile 5 upregulated in mature LS forms (Cluster 7).
 
 * Evaluate if the new GO terms for this profiles increase significance and data interpretation. 
 
-
 ```{r}
 day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
                       sep=",",comment.char = "#")
 head(day2_de)
 # dim(day2_de) #1978   20
 
-time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
+time_course <- read.csv("results/time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
   rename_at(vars(X), ~c("gene_id")) %>% 
   mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>% 
   mutate(combined_gene_clusters=case_when(
@@ -1872,7 +1871,7 @@ replace_long_strings <- function(string){
 ```
 
 ```{r}
-day2_go_clean <- read.csv("GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv") %>% 
+day2_go_clean <- read.csv"results/GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv") %>% 
   mutate(Direction=ifelse(NES>0, "Enriched_Day2","Enriched_SPZ")) %>%
   mutate(labels=case_when(
     grepl(",", go_term_name) ~ gsub("^(.+),.+","\\1", go_term_name),
@@ -1925,7 +1924,7 @@ day2_go_clean <- purrr::map_dfr(D2_GSEA_objs, function(x) x@result) %>%
 
 # day2_go_clean %>% filter(ontology == "Biological_Process")
 # table(day2_go_clean$Direction)
-# write.csv(day2_go_clean, "GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv", row.names = FALSE)
+# write.csv(day2_go_clean, results/GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -2032,11 +2031,11 @@ head(cluster_go_dfs, n=20)
 
 
 table(cluster_go_dfs$cluster_number)
-# write.csv(cluster_go_dfs, "GO_enrichment/time_course_clusters_clusterProfiler_allOntology.csv", row.names = FALSE)
+# write.csv(cluster_go_dfs, results/GO_enrichment/time_course_clusters_clusterProfiler_allOntology.csv", row.names = FALSE)
 ```
 
 ```{r}
-cluster_go_dfs <-  read.csv("GO_enrichment/timecourse/time_course_clusters_clusterProfiler_allOntology.csv") %>% 
+cluster_go_dfs <-  read.csv"results/GO_enrichment/timecourse/time_course_clusters_clusterProfiler_allOntology.csv") %>% 
   filter(qvalue < 0.2) %>% 
   mutate(len=nchar(go_term_name)) %>% 
   mutate(labels=case_when(
@@ -2067,7 +2066,7 @@ cluster_go_dfs %>%
               rownames_to_column("cluster_number"), 
             by="cluster_number") 
  
-# write.csv(.,"GO_enrichment/time_course_clusters_clusterProfiler_SigResults_Summary.csv", row.names = FALSE)
+# write.csv(.,results/GO_enrichment/time_course_clusters_clusterProfiler_SigResults_Summary.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -2146,7 +2145,7 @@ bubble_plot +
 ### Time point profiles
 
 ```{r}
-cluster_go_combined_dfs <- read.csv("GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_allOntology.csv") %>% 
+cluster_go_combined_dfs <- read.csv"results/GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_allOntology.csv") %>% 
     mutate(labels=case_when(
     grepl("RNA polymerase", go_term_name) ~ gsub("RNA polymerase","RNApol",go_term_name),
     grepl(".apurinic or apyrimidinic site.", go_term_name) ~ gsub(".apurinic or apyrimidinic site.","", go_term_name),
@@ -2215,7 +2214,7 @@ cluster_go_combined_dfs <- bind_rows(cluster_go_combined) %>%
 
 # head(cluster_go_combined_dfs)
 
-# write.csv(cluster_go_combined_dfs, "GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_allOntology.csv", row.names = FALSE)
+# write.csv(cluster_go_combined_dfs, results/GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_allOntology.csv", row.names = FALSE)
 ```
 
 
@@ -2503,16 +2502,16 @@ Day2 <- read.csv("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_
 Day2 %>%
   dplyr::filter(logFC > 0) %>%
   pull(gene_id) %>%
-  write.table(.,"GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
+  write.table(.,results/GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
               sep="\t", quote=FALSE, row.names = FALSE)
 
 Day2 %>%
   dplyr::filter(logFC < 0) %>%
   pull(gene_id) %>% 
-  write.table(.,"GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
+  write.table(.,results/GO_enrichment/day2/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
               sep="\t", quote=FALSE, row.names = FALSE)
 
-sigs_all_df_d456 <-  read.csv("time_course/masigpro/masigpro_significant_genes_d456_results.csv") %>% 
+sigs_all_df_d456 <-  read.csv("results/time_course/masigpro/masigpro_significant_genes_d456_results.csv") %>% 
   rename_at(vars(X), ~c("gene_id"))
 
 gene_clusts_dfs <- purrr::map(unique(sigs_all_df_d456$gene_cluster), function(clust){
@@ -2532,7 +2531,7 @@ https://static-content.veupathdb.org/documents/GO-Enrichment.pdf
 
 ```{r}
 # From PLASMODB GO analysis - need to find the GO terms themselves...
-res_path <- dir("GO_enrichment/",
+res_path <- dir"results/GO_enrichment/",
                 recursive = TRUE,
                 pattern = ".tsv",
                 full.names = TRUE)
@@ -2653,7 +2652,7 @@ From the PFM, a position probability matrix (PPM) can now be created by dividing
 # Prepare data for HOMER
 Day2 <- read.csv("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv", comment.char = "#")
 
-time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
+time_course <- read.csv("results/time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
   rename_at(vars(X), ~c("gene_id")) %>% 
   mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>% 
   mutate(combined_gene_clusters=case_when(
@@ -2667,7 +2666,7 @@ time_course <- read.csv("time_course/masigpro/masigpro_significant_genes_degree2
   arrange(gene_cluster)
 
 gene_clusts_dfs <- purrr::map(unique(time_course$gene_cluster), function(clust){
-  out <- here::here(file.path("motif_analysis/homer",paste0("cluster",clust)))
+  out <- here::here(file.path"results/motif_analysis/homer",paste0("cluster",clust)))
   dir.create(out,recursive = T, showWarnings = FALSE)
   subset <- time_course %>%
     dplyr::filter(gene_cluster==clust)
@@ -2686,7 +2685,7 @@ gene_clusts_combined_dfs <- purrr::map(unique(time_course$combined_gene_clusters
   subset <- time_course %>%
     dplyr::filter(combined_gene_clusters==clust)
   
-  out <- here::here(file.path("motif_analysis/homer",paste0("cluster",clust)))
+  out <- here::here(file.path"results/motif_analysis/homer",paste0("cluster",clust)))
   dir.create(out,recursive = T, showWarnings = FALSE)
   outfile <- file.path(out,paste0("Heps_Pf_vs_sporozorite_combat-seq_corrected_masigpro_",clust, ".csv"))
   if (!file.exists(outfile)) {
@@ -2702,20 +2701,20 @@ table(time_course$gene_cluster_factor,
 ```
 
 ```{r eval=FALSE}
-dir.create("motif_analysis/homer/day2/up",recursive = T,showWarnings = FALSE)
-dir.create("motif_analysis/homer/day2/down",recursive = T, showWarnings = FALSE)
+dir.create"results/motif_analysis/homer/day2/up",recursive = T,showWarnings = FALSE)
+dir.create"results/motif_analysis/homer/day2/down",recursive = T, showWarnings = FALSE)
 
 
 # Day2 %>%
 #   dplyr::filter(logFC > 0) %>%
 #   pull(gene_id) %>% 
-#   write.table(.,"motif_analysis/homer/day2/up/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
+#   write.table(.,results/motif_analysis/homer/day2/up/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
 #               sep="\t", quote=FALSE, row.names = FALSE)
 # 
 # Day2 %>%
 #   dplyr::filter(logFC < 0) %>%
 #   pull(gene_id) %>% 
-#   write.table(.,"motif_analysis/homer/day2/down/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
+#   write.table(.,results/motif_analysis/homer/day2/down/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
 #               sep="\t", quote=FALSE, row.names = FALSE)
 ```
 
@@ -3040,9 +3039,9 @@ A negLog10 P or FDR > 1.3 will ~= 0.050118
 A negLog10 P or FDR > 4.0 will ~= 0.0001
 
 
-day2_enr <- readRDS("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
+day2_enr <- readRDS"results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
 day2_enr[["enrichment_res"]] <- day2_enr$enrichement_res # spelling error 
-day2_AP2_results <- read.csv("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv")
+day2_AP2_results <- read.csv"results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv")
 
 ```{r}
 day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv",
@@ -3052,7 +3051,7 @@ day2_de <- read.delim("DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corre
 ```
 
 ```{r}
-day2_enr <- readRDS("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
+day2_enr <- readRDS"results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
 # day2_enr <- motif_enrichment_workflow(targets_df = day2_de,
 #                             col_to_bin = "logFC",
 #                             PWMs = AP2_PWMlist,
@@ -3061,14 +3060,14 @@ day2_enr <- readRDS("motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
 #                             make_bins = TRUE,
 #                             use_bg_regions = TRUE)
 
-# saveRDS(day2_enr, "motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
+# saveRDS(day2_enr, results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
 ```
 
 ```{r}
 day2_AP2_results <- create_motif_df(motif_result_list = day2_enr, col_to_bin = "logFC")
 
 # dim(day2_AP2_results) #44 
-# write.csv(day2_AP2_results, "motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv", row.names = FALSE)
+# write.csv(day2_AP2_results, results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -3196,7 +3195,7 @@ tc_profiles <- time_course %>%
 ```
 
 ```{r}
-cluster_motifs <- readRDS("motif_analysis/monaLisa/time_course_ap2_results_list.RDS")
+cluster_motifs <- readRDS"results/motif_analysis/monaLisa/time_course_ap2_results_list.RDS")
 ```
 
 ```{r eval=FALSE}
@@ -3219,13 +3218,13 @@ for (cluster in cluster_nums){
   cluster_motifs[[cluster]] <- enr
 }
 
-# saveRDS(cluster_motifs,"motif_analysis/monaLisa/time_course_ap2_results_list.RDS")
+# saveRDS(cluster_motifs,results/motif_analysis/monaLisa/time_course_ap2_results_list.RDS")
 ```
 
 ```{r}
 with_prom_bg <- purrr::map_dfr(cluster_motifs, create_motif_df)
 
-# write.csv(with_prom_bg,"motif_analysis/monaLisa/time_course_ap2_results.csv", row.names = FALSE)
+# write.csv(with_prom_bg,results/motif_analysis/monaLisa/time_course_ap2_results.csv", row.names = FALSE)
 
 with_prom_bg %>%
   # filter(gene_cluster=="cluster7") %>%
@@ -3235,7 +3234,7 @@ with_prom_bg %>%
 ```
 
 ```{r}
-profile_motifs <- readRDS("motif_analysis/monaLisa/time_course_profiles_ap2_results_list.RDS")
+profile_motifs <- readRDS"results/motif_analysis/monaLisa/time_course_profiles_ap2_results_list.RDS")
 ```
 
 ```{r eval=FALSE}
@@ -3258,13 +3257,13 @@ for (profile in profile_nums){
   profile_motifs[[profile]] <- enr
 }
 
-# saveRDS(profile_motifs, "motif_analysis/monaLisa/time_course_profiles_ap2_results_list.RDS")
+# saveRDS(profile_motifs, results/motif_analysis/monaLisa/time_course_profiles_ap2_results_list.RDS")
 ```
 
 ```{r}
 profiles_with_prom_bg <- purrr::map_dfr(profile_motifs, create_motif_df, col_to_bin="combined_gene_clusters")
 
-# write.csv(profiles_with_prom_bg,"motif_analysis/monaLisa/time_course_profiles_ap2_results.csv", row.names=FALSE)
+# write.csv(profiles_with_prom_bg,results/motif_analysis/monaLisa/time_course_profiles_ap2_results.csv", row.names=FALSE)
 
 profiles_with_prom_bg %>% 
   filter(negLog10P > 1.2) %>% 
@@ -3320,7 +3319,7 @@ cluster_hits_enr <- with_prom_bg %>%
     arrange(gene_cluster, desc(negLog10P))
     
 dim(cluster_hits_enr)
-# write.csv(cluster_hits_enr, "motif_analysis/monaLisa/time_course_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
+# write.csv(cluster_hits_enr, results/motif_analysis/monaLisa/time_course_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
 ```
 
 
@@ -3358,7 +3357,7 @@ profile_hits_enr <- profiles_with_prom_bg %>%
 ```{r}
 head(profile_hits_enr)
 dim(profile_hits_enr)
-# write.csv(profile_hits_enr, "motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
+# write.csv(profile_hits_enr, results/motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
 ```
 
 ### Visualization 
@@ -3366,8 +3365,8 @@ dim(profile_hits_enr)
 #### Time course Clusters 
 
 ```{r}
-with_prom_bg <- read.csv("motif_analysis/monaLisa/time_course_ap2_results.csv")
-profiles_with_prom_bg <- read.csv("motif_analysis/monaLisa/time_course_profiles_ap2_results.csv")
+with_prom_bg <- read.csv"results/motif_analysis/monaLisa/time_course_ap2_results.csv")
+profiles_with_prom_bg <- read.csv"results/motif_analysis/monaLisa/time_course_profiles_ap2_results.csv")
 ```
 
 ```{r}
@@ -4056,7 +4055,7 @@ dim(orthoGroups) #5389   12
 ```
 
 ```{r}
-orthoGroups_species <- read.delim("motif_analysis/orthogroups_pf_to_all_species_v2.txt", sep = "\t") %>% 
+orthoGroups_species <- read.delim("results/motif_analysis/orthogroups_pf_to_all_species_v2.txt", sep = "\t") %>% 
   janitor::clean_names() %>% 
   filter(!grepl("-old", accession)) %>% 
   mutate(taxon_clean=gsub("^([A-Z][a-z]+\\s[a-z]+)\\s.+", "\\1", taxon_name),
@@ -4080,7 +4079,7 @@ Rscript motif_analysis/uniprot.ws_lookup.R
 ```
 
 ```{r}
-ortholog_search_res <- dir("motif_analysis/uniprot_ids",
+ortholog_search_res <- dir"results/motif_analysis/uniprot_ids",
                            pattern = "*.RDS", 
                            full.names = TRUE)
 
@@ -4119,13 +4118,13 @@ pfm <- TFBSTools::getMatrixSet(JASPAR2022, opts2)
 
 length(pwm) #1956
 length(pfm) #1956
-# saveRDS(pwm, "motif_analysis/JASPAR2022_PWMs.RDS")
-# saveRDS(pfm, "motif_analysis/JASPAR2022_PFMs.RDS")
+# saveRDS(pwm, results/motif_analysis/JASPAR2022_PWMs.RDS")
+# saveRDS(pfm, results/motif_analysis/JASPAR2022_PFMs.RDS")
 ```
 
 ```{r}
-all_PWMs <- readRDS("motif_analysis/JASPAR2022_PWMs.RDS")
-all_PFMs <- readRDS("motif_analysis/JASPAR2022_PFMs.RDS")
+all_PWMs <- readRDS"results/motif_analysis/JASPAR2022_PWMs.RDS")
+all_PFMs <- readRDS"results/motif_analysis/JASPAR2022_PFMs.RDS")
 
 length(all_PFMs) #1956
 ```
@@ -4174,7 +4173,7 @@ sel_motif_annots <- motif_annots %>%
 
 # sel_motif_annots
 dim(sel_motif_annots)
-# write.csv(sel_motif_annots, "motif_analysis/jaspar2022_orthologs.csv", row.names = F)
+# write.csv(sel_motif_annots, results/motif_analysis/jaspar2022_orthologs.csv", row.names = F)
 ```
 
 
@@ -4196,7 +4195,7 @@ ortho_day2_enr <- motif_enrichment_workflow(targets_df = Day2,
                                       col_to_bin = "logFC",
                                       use_bg_regions = TRUE)
 
-# saveRDS(ortho_day2_enr,"motif_analysis/monaLisa/day2_vs_spz_orthologs_monaLisa_results.RDS")
+# saveRDS(ortho_day2_enr,results/motif_analysis/monaLisa/day2_vs_spz_orthologs_monaLisa_results.RDS")
 ```
 
 ```{r}
@@ -4208,7 +4207,7 @@ ortho_enr_df <- create_motif_df(ortho_day2_enr,col_to_bin = "logFC") %>%
 
 # dim(ortho_enr_df)
 ortho_enr_df
-# write.csv(ortho_enr_df,"motif_analysis/monaLisa/day2_vs_spz_orthologs_monaLisa_results.csv", row.names = FALSE)
+# write.csv(ortho_enr_df,results/motif_analysis/monaLisa/day2_vs_spz_orthologs_monaLisa_results.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -4241,7 +4240,7 @@ for (cluster in cluster_nums){
   ortho_cluster_motifs[[cluster]] <- enr
 }
 
-# saveRDS(ortho_cluster_motifs,"motif_analysis/monaLisa/time_course_ortholog_results_list.RDS")
+# saveRDS(ortho_cluster_motifs,results/motif_analysis/monaLisa/time_course_ortholog_results_list.RDS")
 ```
 
 ```{r}
@@ -4250,7 +4249,7 @@ ortho_cluster_motifs_dfs <- purrr::map_dfr(ortho_cluster_motifs, create_motif_df
   select(motif,gene_cluster, gene_name,pfal_gene_id, class, family, everything()) %>% 
   arrange(desc(negLog10P))
 
-# write.csv(ortho_cluster_motifs_dfs,"motif_analysis/monaLisa/time_course_orthologs_results.csv", row.names = FALSE)
+# write.csv(ortho_cluster_motifs_dfs,results/motif_analysis/monaLisa/time_course_orthologs_results.csv", row.names = FALSE)
 
 ortho_cluster_motifs_dfs %>%
   filter(negLog10P > 1.2) %>%
@@ -4277,7 +4276,7 @@ for (profile in profile_nums){
   ortho_profile_motifs[[profile]] <- enr
 }
 
-# saveRDS(ortho_profile_motifs, "motif_analysis/monaLisa/time_course_profiles_orthologs_results_list.RDS")
+# saveRDS(ortho_profile_motifs, results/motif_analysis/monaLisa/time_course_profiles_orthologs_results_list.RDS")
 ```
 
 ```{r}
@@ -4286,7 +4285,7 @@ ortho_profile_motifs_dfs <- purrr::map_dfr(ortho_profile_motifs, create_motif_df
   select(motif,gene_cluster, gene_name,pfal_gene_id, class, family, everything()) %>% 
   arrange(gene_cluster, desc(negLog10P))
 
-# write.csv(ortho_profile_motifs_dfs,"motif_analysis/monaLisa/time_course_profiles_orthologs_results.csv", row.names = FALSE)
+# write.csv(ortho_profile_motifs_dfs,results/motif_analysis/monaLisa/time_course_profiles_orthologs_results.csv", row.names = FALSE)
 
 ortho_profile_motifs_dfs %>%
   filter(negLog10P > 1.2) %>%
@@ -4297,7 +4296,7 @@ ortho_profile_motifs_dfs %>%
 ### Visualization Motif Enrichment / Seq Logos 
 
 ```{r}
-ortho_cluster_motifs_dfs <- read.csv("motif_analysis/monaLisa/time_course_orthologs_results.csv")
+ortho_cluster_motifs_dfs <- read.csv"results/motif_analysis/monaLisa/time_course_orthologs_results.csv")
 
 input <- ortho_cluster_motifs_dfs  %>%
   mutate(gene_cluster_factor=factor(gsub("cluster", "", gene_cluster),
@@ -4329,7 +4328,7 @@ input <- ortho_cluster_motifs_dfs  %>%
 ```
 
 ```{r}
-sel_motif_annots <- read.csv("motif_analysis/jaspar2022_orthologs.csv")
+sel_motif_annots <- read.csv"results/motif_analysis/jaspar2022_orthologs.csv")
 
 ortho_motif_PWMs <- all_PFMs[sel_motif_annots$motif] %>% 
   toPWM(., type="prob")
@@ -4383,6 +4382,13 @@ expn_top_hits <- expression[unique(pf_ortho_geneids$pfal_gene_id), rownames(inpu
 ```
 
 ```{r}
+expn_labs_d456 <- expn_d456 %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))) %>% 
+  select(analysis_factor_group, everything())
+
 summary_stats_TF1 <- expn_top_hits %>% 
   group_by(gene_cluster_factor, 
            analysis_factor_group,
@@ -4401,7 +4407,11 @@ summary_stats_TF1 <- expn_top_hits %>%
          masigpro_id,
          motif, stat, mean, 
          ymin:ymax) %>% 
-  distinct()
+  distinct() %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))) 
 
 tc_ortho_summary_stats <- expn_d456 %>% 
   mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
@@ -4435,35 +4445,24 @@ tc_ortho_summary_stats <- expn_d456 %>%
   ungroup() %>%
 
   arrange(gene_cluster_factor,analysis_factor_group) %>%
-  mutate(label=factor(label, levels=unique(label)))
+  mutate(label=factor(label, levels=unique(label))) %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))) 
 
-
-# summary_stats
-# table(summary_stats$stat)
-table(summary_stats$motif)
-unique(summary_stats$motif)[order(unique(summary_stats$motif))]
-unique(input$motif)[order(unique(input$motif))]
-
-
-# table(summary_stats$label)
-```
-
-```{r}
-# ggthemes::canva_palettes %>% names() %>% grep("bold", ., value = T)
 
 motif_colors <- c(ggthemes::canva_pal("Simple but bold")(4), ggthemes::canva_pal("Warm and bold")(4))
 motif_colors <- motif_colors[c(2:4,6:8)] %>% 
   set_names(c("time-course cluster",unique(input$motif)))
 
-barplot(rep(1,length(motif_colors)), col=motif_colors)
-```
+# barplot(rep(1,length(motif_colors)), col=motif_colors)
 
-```{r}
 tc_ortho_plots <- create_motif_enr_plots(enr_df = input, 
                        factor_column="gene_cluster_factor",
                        motif_order =  order_motifs_tc,
                        summary_stats = tc_ortho_summary_stats, 
-                       expn_df_long = expn_d456, 
+                       expn_df_long = expn_labs_d456, 
                        PWMlist = ortho_motif_PWMs,
                        motif_tile_fill = 'blue',
                        motif_colors = motif_colors)
@@ -4485,10 +4484,7 @@ ABK
 wdts <- c(0.6,0.6,0.75)
 
 
-# svglite("figures/motif_analysis/time_point_cluster_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=10,
-#         system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
-
-# svg("figures/motif_analysis/time_point_cluster_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=12)
+# svglite("figures/motif_analysis/time_point_cluster_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 15, width=15, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
 tc_ortho_plots$time_cluster + tc_ortho_plots$motif_enr + 
   tc_ortho_plots$top_logos$`cluster1:MA0502.2` +
   plot_spacer() + 
@@ -4504,7 +4500,7 @@ tc_ortho_plots$time_cluster + tc_ortho_plots$motif_enr +
 ```
 
 ```{r fig.height=10, fig.width=10}
-# svg("figures/motif_analysis/time_point_cluster_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 12, width=10)
+# svglite("figures/motif_analysis/time_point_cluster_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 18, width=17, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
 tc_ortho_plots$time_ribbon + tc_ortho_plots$motif_enr + 
   tc_ortho_plots$top_logos$`cluster1:MA0502.2` +
   plot_spacer() + 
@@ -4522,7 +4518,7 @@ tc_ortho_plots$time_ribbon + tc_ortho_plots$motif_enr +
 ###### Time Course Profiles 
 
 ```{r}
-ortho_profile_motifs_dfs <- read.csv("motif_analysis/monaLisa/time_course_profiles_orthologs_results.csv")
+ortho_profile_motifs_dfs <- read.csv"results/motif_analysis/monaLisa/time_course_profiles_orthologs_results.csv")
 
 in_profiles <- ortho_profile_motifs_dfs  %>%
   mutate(gene_cluster_factor=as.factor(gene_cluster),
@@ -4620,7 +4616,11 @@ summary_stats_TF2 <- p_expn_top_hits %>%
          masigpro_id,
          motif, stat, mean, 
          ymin:ymax) %>% 
-  distinct()
+  distinct() %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))) 
 
 profile_labs <- time_course %>% 
   group_by(combined_gene_clusters) %>% 
@@ -4673,10 +4673,11 @@ profile_summary_stats <- expn_d456 %>%
   ungroup() %>% 
   
   arrange(gene_cluster_factor,analysis_factor_group) %>% 
-  mutate(label=factor(label, levels=unique(label)))
-
-
-# head(profile_summary_stats)
+  mutate(label=factor(label, levels=unique(label))) %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS"))) 
 
 profile_median_expn <- expn_d456 %>% 
   select(-label) %>% 
@@ -4698,7 +4699,12 @@ profile_median_expn <- expn_d456 %>%
   group_by(gene_cluster_factor, analysis_factor_group) %>% 
   mutate(median_val=median(log2_CPM),
          mean_val=mean(log2_CPM)) %>% 
-  ungroup()
+  ungroup() %>% 
+  mutate(masigpro_id = gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2",   gsub("Pf_Day0","sporozoites",masigpro_id))) %>% 
+  mutate(analysis_factor_group = factor(gsub("_Rep[0-9]", "", masigpro_id), 
+                                          levels= c("sporozoites","Day2_Pf_LS",
+                                                    "Day4_Pf_LS","Day5_Pf_LS","Day6_Pf_LS")))
+
 ```
 
 ```{r fig.height=10, fig.width=10}
@@ -4735,6 +4741,7 @@ wdts <- c(0.6,0.6,0.75)
 
 
 # svg("figures/motif_analysis/time_point_profiles_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 8, width=10)
+# svglite("figures/motif_analysis/time_point_profiles_ortholog_heatmap_seqlogos_tileplot_rows.svg", height = 15, width=17, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
 profile_ortho_plots$time_cluster + profile_ortho_plots$motif_enr + 
   profile_ortho_plots$top_logos$`Profile1:MA1644.1` +
   plot_spacer() + 
@@ -4747,6 +4754,8 @@ profile_ortho_plots$time_cluster + profile_ortho_plots$motif_enr +
 
 ```{r fig.height=5, fig.width=10}
 # svg("figures/motif_analysis/time_point_profile_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 10, width=12)
+
+# svglite("figures/motif_analysis/time_point_profile_ortholog_TF_expn_heatmap_seqlogos_tileplot_rows.svg", height = 15, width=17, system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
 profile_ortho_plots$time_ribbon +
   profile_ortho_plots$motif_enr +
   profile_ortho_plots$top_logos$`Profile1:MA1644.1` +
@@ -4798,7 +4807,6 @@ head(orth_tfs_expn)
 dim(orth_tfs_expn)  # 126  27
 # length(unique(orth_tfs_expn$gene_id)) # 9 OK
 ```
-
 
 
 ```{r fig.height=10, fig.width=10}
@@ -4862,7 +4870,7 @@ pheatmap::pheatmap(ortho_tfs_mat,
 ### Search Homer Known Results
 
 ```{r}
-homer_paths <- dir("motif_analysis/homer", pattern = "knownResults.txt", full.names = TRUE, recursive = T)
+homer_paths <- dir"results/motif_analysis/homer", pattern = "knownResults.txt", full.names = TRUE, recursive = T)
 
 ids <- str_split_fixed(homer_paths, pattern = "/", n=5)[,3:4] %>% 
   as.data.frame() %>% 

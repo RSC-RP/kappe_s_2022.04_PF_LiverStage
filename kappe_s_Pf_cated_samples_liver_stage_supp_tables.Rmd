@@ -1,0 +1,94 @@
+---
+title: "Generate Standardized Tables for Supplementary Data"
+author: "Jenny L. Smith"
+date: "`r Sys.Date()`"
+always_allow_html: true
+output:
+  html_document:
+    theme: yeti
+    highlight: breezedark
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    df_print: paged
+---
+
+# Set-up 
+
+```{r set-up, echo=FALSE}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),
+                      tidy=TRUE,
+                      fig.align='center',
+                      fig.width = 10, fig.height = 10,
+                      eval = TRUE)
+
+options(stringsAsFactors = FALSE, max.print = 100)
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+```
+
+```{r message=FALSE}
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(magrittr)
+library(stringr)
+library(glue)
+library(ggplot2)
+library(patchwork)
+
+
+# GRangs/annotationDBI override common dplyr functions, and conflicted Rpackage allows you to set a preferred function. 
+conflicted::conflict_prefer("select","dplyr")
+conflicted::conflict_prefer("filter","dplyr")
+```
+
+# Sample Manifests and Metadata
+
+```{r}
+manifest <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sample_manifest_7.25.2022.csv") %>% 
+  mutate_at(vars(analysis_group_id), ~gsub("(^.+)(_Heps_)(S[0-9]).+", "\\1_Pf_LS_\\3", .) %>% 
+              gsub("_S","_Rep", .)) %>%
+  mutate(analysis_factor_group = gsub("_Heps_Pf", "_Pf_LS",analysis_factor_group)) %>% 
+  mutate_at(vars(analysis_group_id, analysis_factor_group),
+            ~gsub("sporozorite","sporozoite", .)) %>% 
+  select(sample_id_cat:analysis_group_id, analysis_factor_group, 
+         everything(), 
+         -analysis_group)
+
+head(manifest)
+# dim(manifest)
+```
+
+```{r}
+table(manifest$analysis_group_id)
+table(manifest$analysis_factor_group)
+```
+
+# Define Files to Update
+
+```{r}
+paper_dir <- file.path("/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/Paper_Versions/Figures_layout")
+
+to_update <- basename(dir(paper_dir, pattern = "*.csv", recursive = TRUE)) %>% 
+  grep("Figure2_all_Genes|conversion_table", ., value=T, invert = T)
+
+to_update
+```
+
+```{r}
+cmds <- glue("find . -name {to_update} -not -path './references/*' ")
+file_locations <- purrr::map(cmds, function(cmd) system(cmd, intern = TRUE))
+
+file_locations
+```
+
+
+# Session Information 
+
+```{r}
+sessionInfo()
+```
+

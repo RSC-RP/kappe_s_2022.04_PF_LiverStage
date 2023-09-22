@@ -725,21 +725,32 @@ table(cvgs$type)
 
 ```{r}
 sel_samps <- pf_samples %>% 
-  filter(!grepl("Day[02]", time_point))
+  filter(!grepl("Day2", time_point)) %>% 
+  mutate(analysis_factor_group = gsub("Heps_", "", analysis_factor_group) %>% 
+           paste0(.,"_LS") %>% 
+           gsub("sporo.+","sporozoites", .),
+         analysis_group_id = gsub("Heps_|\\+","", analysis_group_id) %>% 
+           gsub("_S","_Rep", .) %>% 
+           gsub("(Day[0-9]_)(Rep[0-9]).+", "\\1Pf_LS_\\2", .) %>% 
+           gsub("sporo.+(_Rep[0-9])","sporozoites\\1", .)
+         ) %>% 
+  set_rownames(.$analysis_group_id)
 
+# sel_samps
 table(sel_samps$analysis_factor_group)
+# table(sel_samps$analysis_group_id)
 ```
 
 ```{r}
 cvg_expn <- log2(TPM[,sel_samps$sample_id_cat]+1)
-# cvg_expn <- log2(assay(cb_se,"cpm")+1)[,sel_samps$sample_id_cat]
+colnames(cvg_expn) <- sel_samps$analysis_group_id
+
 include <- base::intersect(cvgs$gene_id, rownames(cvg_expn))
 cvg_expn <- cvg_expn[include,]
-# table(rowSums(cvg_expn) > 0) #131  remove all zero count genes
 cvg_expn <- cvg_expn[rowSums(cvg_expn) > 0, ]
 
 # head(cvg_expn[,1:5])
-dim(cvg_expn) #316  17
+dim(cvg_expn) 
 # any(duplicated(rownames(cvg_expn)))
 ```
 
@@ -754,12 +765,9 @@ cvgs %>%
   group_by(type) %>%
   dplyr::count() 
 #   write.csv(., "cvgs_pexel_domains/cvgs_counts_table_filtered_by_expression.csv", row.names = F)
-```
 
-```{r}
 missing <- dplyr::setdiff(cvgs$gene_id, rownames(cvg_expn))
 # length(missing)
-
 missing_raw_counts <- counts %>% 
   filter(gene_name %in% missing) %>% 
   pivot_longer(cols = -gene_name,
@@ -779,13 +787,13 @@ cvg_expn_long <- cvg_expn %>%
   as.data.frame() %>% 
   rownames_to_column("gene_id") %>% 
   pivot_longer(cols = -gene_id,
-               names_to = "sample_id_cat",
+               names_to = "analysis_group_id",
                values_to = "log2TPM") %>% 
-  inner_join(., pf_samples, by="sample_id_cat") %>%
+  inner_join(., sel_samps, by="analysis_group_id") %>%
   left_join(., cvgs, by=c("gene_id")) %>%
   select(gene_id:log2TPM, type, product, everything())
 
-cvg_expn_long
+# cvg_expn_long
 # table(cvg_expn_long$type)
 ```
 
@@ -805,8 +813,7 @@ purrr::map(sheet_names, function(cvg_type){
   n <- length(unique(input$gene_id))
   fig_width <- ifelse(n<=11, 4, 15)
   
-  # svglite(paste0("figures/uncorrected/cvgs_pexel/cvg_", cvg_type,"_TPM_expression_boxplot.svg"),
-          # fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = fig_width)
+  # svglite(paste0("figures/uncorrected/cvgs_pexel/cvg_", cvg_type,"_TPM_expression_boxplot.svg"), fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 5, width = fig_width)
   print(ggplot(input, 
          aes(x=gene_id, y=log2TPM, fill=analysis_factor_group)) +
     geom_boxplot(color="grey50", alpha=0.2) +
@@ -826,15 +833,21 @@ purrr::map(sheet_names, function(cvg_type){
 ```
 
 ```{r fig.height=10, fig.width=10}
-colanno <- sel_samps %>% 
-  select(time_point=analysis_factor_group) %>% 
-  HeatmapAnnotation(df = ., which = "column",
-                    col = list(time_point=ggpubr::get_palette("jco",5) %>%
-                                          set_names(unique(pf_samples$analysis_factor_group))))
-# colanno
+colanno_df <- sel_samps %>% 
+  filter(time_point != "Day0") %>% 
+  select(time_point = analysis_factor_group) 
+
+mat <- as.matrix(cvg_expn[, rownames(colanno_df)]) 
+mat <- mat[rowSums(mat) > 0, ]
+
+colanno <-  HeatmapAnnotation(df = colanno_df,
+                    which = "column",
+                    col = list(time_point=ggpubr::get_palette("jco",3) %>%
+                                          set_names(unique(colanno_df$time_point))))
+
 
 rowanno <- cvgs %>% 
-  filter(gene_id %in% rownames(cvg_expn)) %>% 
+  filter(gene_id %in% rownames(mat)) %>% 
   select(-product, CVG_type=type) %>% 
   column_to_rownames("gene_id") 
 
@@ -845,11 +858,6 @@ gap_index <- rowanno %>%
   arrange(n) %>% 
   mutate(CVG_type=factor(CVG_type, levels=unique(CVG_type))) %>% 
   select(-n)
-  # mutate(nrow=1:nrow(.)) %>% 
-  # group_by(CVG_type) %>%
-  # summarise(index=max(nrow)) %>% 
-  # pull(index, name = CVG_type)
-
 
 rowanno <- rowanno %>%
   mutate(CVG_type=factor(CVG_type, levels=unique(gap_index$CVG_type))) %>%
@@ -861,24 +869,25 @@ rowanno <- rowanno %>%
                     col = list(CVG_type=ggpubr::get_palette(palette = "npg", 6) %>%
                                         set_names(unique(rowanno$CVG_type))))
 
-# heat_colors <- colorRampPalette(viridis::turbo(10))(299)
-# quantile(as.matrix(cvg_expn[gene_order, ]), probs = seq(0,1,length.out=11))
+# pdf("figures/uncorrected/cvgs_pexel/CGVs_timepoints_D456_log2TPM_heatmap.pdf", height = 12, width = 12)
+mat <- mat[gene_order, ] 
 heat_colors <- circlize::colorRamp2(breaks=c(0,1,3,6,9), colors = viridis::turbo(5))
-mat <- as.matrix(cvg_expn[gene_order, ]) 
-colnames(mat) <- sel_samps$analysis_group_id
 
-# pdf("figures/uncorrected/cvgs_pexel/CGVs_timepoints_D456_log2TPM_heatmap.pdf", height = 12, width = 10)
+# svglite::svglite("figures/uncorrected/cvgs_pexel/CGVs_timepoints_D456_log2TPM_heatmap.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 12, width = 12)
 Heatmap(matrix = mat, 
         col = heat_colors,
         name = "log2 TPM",
         split = gap_index,
         top_annotation = colanno, 
         left_annotation = rowanno, 
+        column_dend_reorder =  rep(1:3,each = 3), 
+        column_names_gp = gpar(fontsize=14),
         show_column_names = TRUE,
-        row_title_gp = gpar(fontsize = 6),
-        # row_title_rot = 270,
-        column_names_gp = gpar(fontsize=6),
-        row_names_gp = gpar(fontsize = 6))
+        show_row_names = TRUE,
+        row_title_gp = gpar(fontsize = 14),
+        row_title_rot = 0,
+        row_names_gp = gpar(fontsize = 6)
+        )
 # dev.off()
 ```
 
@@ -1285,18 +1294,18 @@ table(pexel_expn_threshold_1TPM$passed_threshold)
 ```
 
 ```{r fig.height=20, fig.width=12}
-# pexel_expn
+
+colanno_df <- sel_samps %>% 
+  filter(time_point != "Day0") %>% 
+  select(time_point = analysis_factor_group, 
+         sample_id_cat) 
+
 canon_gene_ids <- pexel_hits_bool$gene_id[pexel_hits_bool$has_pexel_domain_canon_RLEDQ]
 
-canon_expn <- log2(pexel_expn[canon_gene_ids, ]+1)
-# dim(canon_expn) #669
-
-colanno <- samples_include %>% 
-  select(time_point=analysis_factor_group) %>% 
-  HeatmapAnnotation(df = ., which = "column",
-                    col = list(time_point=ggpubr::get_palette("jco",5) %>%
-                                          set_names(unique(pf_samples$analysis_factor_group))))
-
+colanno <-  HeatmapAnnotation(df = select(colanno_df, -sample_id_cat),
+                    which = "column",
+                    col = list(time_point=ggpubr::get_palette("jco",3) %>%
+                                          set_names(unique(colanno_df$time_point))))
 rowanno_df <- pexel_expn_threshold_1TPM %>% 
   mutate(label=case_when(
     !grepl("PF3D7", gene_name) ~ paste(gene_id,gene_name,sep=": "), 
@@ -1308,25 +1317,26 @@ rowanno <- rowanno_df %>%
   select(label, passed_threshold) %>%
   column_to_rownames("label") %>% 
   as.data.frame() %>% 
-  HeatmapAnnotation(df = . , which = "row",
+  HeatmapAnnotation(df = . , 
+                    which = "row",
                     col = list(passed_threshold=ggpubr::get_palette(palette = "npg", 2) %>%
                                         set_names(unique(rowanno_df$passed_threshold))))
 
-# heat_colors <- colorRampPalette(viridis::turbo(10))(299)
-# quantile(as.matrix(canon_expn), probs = seq(0,1,length.out=11))
+
 heat_colors <- circlize::colorRamp2(breaks=c(0,1,3,6,9,12), colors = viridis::turbo(6))
-mat <- as.matrix(canon_expn[rowanno_df$gene_id, samples_include$sample_id_cat])
-colnames(mat) <- samples_include$analysis_group_id
+mat <- as.matrix(log2(pexel_expn[rowanno_df$gene_id, colanno_df$sample_id_cat]+1) )
+colnames(mat) <- colanno_df$analysis_group_id
 rownames(mat) <- rowanno_df$label
 
-# pdf("figures/uncorrected/cvgs_pexel/PEXEL_canonical_timepoints_D456_log2TPM_heatmap.pdf", height = 20, width = 12)
+# svglite::svglite("figures/uncorrected/cvgs_pexel/PEXEL_canonical_timepoints_D456_log2TPM_heatmap.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 12, width = 10)
 Heatmap(matrix = mat, 
         col = heat_colors,
         name = "log2 TPM",
         top_annotation = colanno, 
         left_annotation = rowanno,
-        # split = gap_index,
         show_column_names = TRUE,
+        show_row_names = FALSE,
+        column_dend_reorder = rep(1:3, each = 3),
         row_title_gp = gpar(fontsize = 6),
         column_names_gp = gpar(fontsize=6),
         row_names_gp = gpar(fontsize = 2))
@@ -1647,6 +1657,28 @@ plot(fit, labels = TRUE, quantities = TRUE,
 ```
 
 # Share the Data 
+
+```{r}
+pf_samples_supplement <- pf_samples %>% 
+    mutate(manuscript_sample_id=gsub("sporozorite","sporozoites",analysis_group_id) %>% 
+                gsub("Heps","Pf_LS", .) %>% 
+                gsub("^(.+_)[S]([0-9]).{0,}","\\1Rep\\2", .)) %>% 
+  select(sample_id_cat, manuscript_sample_id,
+         everything(),
+         -analysis_group_id)
+
+# dim(pf_samples_supplement)
+# write.csv(pf_samples_supplement,"references/Paper_Versions/kappe_s_Pf_liver_stage_rnaseq_sample_manifest.csv", row.names=FALSE)
+```
+
+```{r}
+TPM_supplement <- TPM[,c("gene_name",pf_samples_supplement$sample_id_cat)]
+head(TPM_supplement)
+
+# dim(TPM_supplement) #5720   18
+# write.csv(TPM_supplement, "references/Paper_Versions/kappe_s_Pf_liver_stage_rnaseq_TPM.csv", row.names=FALSE)
+```
+
 
 ```{bash}
 ./rsync.sh
