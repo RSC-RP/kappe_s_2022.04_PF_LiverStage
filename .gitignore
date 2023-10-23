@@ -5,15 +5,12 @@
 .Ruserdata
 .html
 
-# Workflow Data/Results
+# Workflow Data/Results files
 #https://stackoverflow.com/questions/40460216/how-do-i-make-git-ignore-symlink
-resources
 resources/
 results/
-references/notes.txt
 expression_data/
 figures/
-DEGs/
 00_archive/
 raw_counts/
 qc_data/
@@ -24,16 +21,4 @@ samples/
 presentations/
 ~*
 *.gmt
-*.txt
-*.csv
-GO_enrichment/
-env/
-motif_analysis/
-sashimi_plot.R
-splicing/
-star/
-time_course/
 p.value_to_negLog10P_conversion_table.csv
-pvivax_vs_pfalciparum/
-orthologs_backup.R
-cvgs_pexel_domains/
