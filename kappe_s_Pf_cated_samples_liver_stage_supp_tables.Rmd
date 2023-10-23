@@ -96,6 +96,18 @@ table(manifest$analysis_group_id)
 table(manifest$analysis_factor_group)
 ```
 
+```{r}
+wb <- createWorkbook()
+addWorksheet(wb, sheetName = "sample_manifest", gridLines = TRUE)
+writeData(wb,
+          sheet = "sample_manifest",
+          x = manifest,
+          startCol = 1, startRow = 5,
+          colNames=TRUE)
+saveWorkbook(wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_sample_manifest.xlsx", overwrite = TRUE)
+```
+
+
 
 # Define Files to Update
 
