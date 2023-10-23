@@ -21,4 +21,5 @@ samples/
 presentations/
 ~*
 *.gmt
+*.html
 p.value_to_negLog10P_conversion_table.csv
