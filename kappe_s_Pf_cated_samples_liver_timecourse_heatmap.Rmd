@@ -1,0 +1,133 @@
+---
+title: "2023-14_kappe_s_liver_stage_figures"
+author: "yeji Bae"
+date: "2023-04-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = '/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage//')
+```
+
+```{r}
+library(dplyr)
+library(purrr)
+# library(pheatmap)
+
+# BiocManager::install("ComplexHeatmap")
+library(ComplexHeatmap)
+```
+
+# Data
+```{r}
+# input data 
+TPM <- read.csv("./expression_data/kappe_s_PfHsMmu_PF3D7_TPM_01.17.2023.csv") # 63 samples  5720 genes
+PEXEL_motif_sel <- read.csv("cvgs_pexel_domains/canonical_pexel_motif_hits_150aa_signalP_hits_100aa_expression_TPM.csv") #39 genes 
+# manifest - for day 4,5, and 6 and infected sample 
+manifest_456 <- read.csv("./samples/Kappe_s_2022.04_PF_LiverStage_concat_sample_manifest.csv") %>% 
+  filter(time_point %in% c("Day4", "Day5", "Day6"),
+         infection_status == "Infected")
+
+rownames(TPM) <- TPM[,1] # rename gene_id column as row names 
+TPM_filtered <- TPM[,which(colnames(TPM) %in% manifest_456$sample_id)]
+TPM_filtered
+```
+
+## Heatmap (Fig 6. panel D)
+```{r}
+# write.csv(pexel_summary_stats, "cvgs_pexel_domains/pexel_motif_hits_150aa_expression_TPM.csv", row.names = FALSE)
+pexel_summary_stats <- read.csv("./cvgs_pexel_domains/pexel_motif_hits_150aa_expression_TPM.csv")
+PF3D7_gene_annots <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_annots.csv") %>% 
+  filter(genome=="PF3D7")
+
+pexel_expn_threshold_1TPM <- pexel_summary_stats %>% 
+  filter(n_matches_canonical_RLEDQ > 0 ) %>% 
+  mutate(passed_threshold=case_when(
+    Day4_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+    Day5_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+    Day6_number_samples_expressing_GT1.0_TPM == 3 ~ "Yes",
+    TRUE ~ "No"
+  )) %>% 
+  left_join(., PF3D7_gene_annots, by="gene_id") %>% 
+  select(aa_name, gene_name, passed_threshold, 
+         gene_id:position_canonical_RLEDQ,
+         matches("Day[0-9]_number_samples_expressing"),
+         seqnames:strand, description) 
+
+dim(pexel_expn_threshold_1TPM)
+table(pexel_expn_threshold_1TPM$passed_threshold)
+ # No Yes 
+# 302 380 
+```
+
+```{r}
+pexel_sel_gene_ids <- unique(PEXEL_motif_sel$gene_id)  # selected 39 gene ids 
+pexel_sel_expn <- log2(TPM_filtered[pexel_sel_gene_ids, manifest_456$sample_id_cat] + 1) # expression counts(39x7)
+
+# > ggpubr::get_palette("jco",5)
+# [1] "#0073C2FF" "#EFC000FF" "#868686FF" "#CD534CFF" "#7AA6DCFF"
+# blue, yellow, grey, 
+rowanno_df <- pexel_expn_threshold_1TPM %>% 
+  mutate(label=case_when(
+    !grepl("PF3D7", gene_name) ~ paste(gene_id,gene_name,sep=": "), 
+    TRUE ~ gene_id)) %>% 
+  select(label,gene_id, passed_threshold) %>% 
+  distinct()
+rowanno_df
+# filtering for interested gene
+# manifest_456 <- manifest_456 %>% mutate(col_names = c("Day4_Pf_LS_Rep1","Day4_Pf_LS_Rep2", "Day4_Pf_LS_Rep3",  "Day5_Pf_LS_Rep1","Day5_Pf_LS_Rep2","Day5_Pf_LS_Rep3",  "Day6_Pf_LS_Rep1","Day6_Pf_LS_Rep2","Day6_Pf_LS_Rep3"))
+manifest_456 <- manifest_456 %>% mutate(col_names = c("Day4_Pf_LS_Rep2","Day4_Pf_LS_Rep3", "Day4_Pf_LS_Rep1",  "Day5_Pf_LS_Rep1","Day5_Pf_LS_Rep3","Day5_Pf_LS_Rep2",  "Day6_Pf_LS_Rep3","Day6_Pf_LS_Rep2","Day6_Pf_LS_Rep1"))
+
+
+identical(colnames(pexel_sel_expn), manifest_456$sample_id_cat)
+rowanno <- rowanno_df[which(rowanno_df$gene_id %in% pexel_sel_gene_ids),]
+colanno <- manifest_456 %>%
+  select(time_point) %>%
+  HeatmapAnnotation(df = ., which = "column",
+                    col = list(time_point=ggpubr::get_palette(c("#EFC000FF", "#868686FF", "#CD534CFF"), 3) %>% 
+                                          purrr::set_names(unique(manifest_456$time_point))))
+
+
+heat_colors <- circlize::colorRamp2(breaks=c(0,1,3,6,9,12), colors = viridis::turbo(6))
+mat <- pexel_sel_expn
+col_group_map <- setNames(manifest_456$col_names, manifest_456$sample_id_cat) # 2023.05.30 manifest_456$analysis_group to $col_names
+col_group_map
+colnames(mat) <- col_group_map[colnames(mat)]
+rownames(mat) <- rowanno$label
+# pdf("/active/taylor_s/people/ybae/CP-Bioinformed/kappe_s_2022.11_geo_upload/heatmap_v1.pdf", height = 10, width = 12)
+ht <- Heatmap(matrix = mat, 
+        col = heat_colors,
+        name = "log2 TPM",
+        top_annotation = colanno,
+        show_column_names = TRUE,
+        row_title_gp = gpar(fontsize = 6),
+        column_names_gp = gpar(fontsize=10),
+        row_names_gp = gpar(fontsize = 10))
+ht
+ht2 <- Heatmap(matrix = mat, 
+        col = heat_colors,
+        name = "log2 TPM",
+        column_dend_reorder = rev(column_order(ht)), # reorder the colnames if you do column_reorder(), it will remove your cluster dend from the plot 
+        top_annotation = colanno,
+        show_column_names = TRUE,
+        # row_title_gp = gpar(fontsize = 6),
+        column_names_gp = gpar(fontsize=14),
+        row_names_gp = gpar(fontsize = 11))
+
+manifest_456[2,]
+
+```
+
+```{r, fig.width = 8}
+# svg( "/active/taylor_s/people/ybae/CP-Bioinformed/kappe_s_2022.11_geo_upload/heatmap_v3.svg", height = 10, width = 12)
+ht2
+# dev.off()
+
+# Heatmap(matrix = mat, 
+#       name = "log2 TPM",
+#       show_column_names = TRUE,
+#       row_title_gp = gpar(fontsize = 6),
+#       column_names_gp = gpar(fontsize=10),
+#       row_names_gp = gpar(fontsize = 10))
+```
