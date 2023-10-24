@@ -914,7 +914,7 @@ conflicted::conflict_prefer("intersect","base")
 ```
 
 ```{r}
-# See https://doi.org/10.1371/journal.ppat.1001165.s016 for table used to map old IDs to new IDs on Plasmo DB
+# See https://doi.org/10.1371/journal.ppat.1001165.s019 for info used to map old IDs to new IDs on Plasmo DB
 ap2_ids <- 
   # read.csv("ap2_old_ids_updated_PF3D7.csv") %>% 
   read.csv("expression_data/gene_annots/AP2_old_IDs_updated_PF3D7_IDs.csv") %>%
