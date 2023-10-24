@@ -2,6 +2,7 @@
 ## kappe_s_2022.04_PF_LiverStage
 
 <!-- badges: start -->
+[![DOI](https://zenodo.org/badge/708969203.svg)](https://zenodo.org/badge/latestdoi/708969203)
 <!-- badges: end -->
 
 The goal of kappe_s_2022.04_PF_LiverStage is to conduct transcriptome Profiling of bulk RNA-seq  from Hepatocytes infected with Plasmodium falciparum. 

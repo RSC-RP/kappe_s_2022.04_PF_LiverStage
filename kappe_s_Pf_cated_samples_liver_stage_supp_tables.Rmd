@@ -46,6 +46,10 @@ conflicted::conflict_prefer("select","dplyr")
 conflicted::conflict_prefer("filter","dplyr")
 ```
 
+GEO Accession 
+
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE220039
+
 # Sample Manifests and Metadata
 
 ```{r}
@@ -75,6 +79,7 @@ manifest <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sampl
   mutate(analysis_factor_group = gsub("_Heps_Pf", "_Pf_LS",analysis_factor_group)) %>% 
   mutate_at(vars(analysis_group_id, analysis_factor_group),
             ~gsub("sporozorite","sporozoite", .)) %>% 
+  mutate_at(vars(tissue_source), ~gsub("sporozorite","Anopheles stephensi mosquitoes", .)) %>% 
   mutate_at(vars(tissue_source), ~gsub("infected ","", .)) %>% 
   select(old_ids, 
          sample_id=sample_id_cat,
@@ -85,7 +90,9 @@ manifest <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sampl
   mutate_at(vars(read_length), ~case_when(
     grepl("SRR", sample_id) ~ "150bp",
     TRUE ~ gsub("pb","bp", .)
-  )) 
+  )) %>% 
+  mutate(GEO_accession = 'GSE220039') %>% 
+  select(GEO_accession, everything(), -old_ids)
 
 head(manifest)
 # dim(manifest)
@@ -94,6 +101,7 @@ head(manifest)
 ```{r}
 table(manifest$analysis_group_id)
 table(manifest$analysis_factor_group)
+table(manifest$tissue_source)
 ```
 
 ```{r}
