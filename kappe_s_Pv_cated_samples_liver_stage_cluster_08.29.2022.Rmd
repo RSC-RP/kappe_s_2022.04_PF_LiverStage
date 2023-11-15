@@ -589,7 +589,20 @@ clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
       theme(legend.position='left')
     
 }
+
+replace_long_strings <- function(string){
+  t <- string
+  if(grepl(",", t)){
+    at <- stringr::str_locate_all(t,",")[[1]][,"end"]
+  }else{
+    at <- stringr::str_locate_all(t," ")[[1]][,"end"]
+  }
+  at <- at[at <= 40][length(at[at <= 40])]
+  stringr::str_sub(t, start=at[1],end = at[1]) <- "\n"
+  t
+}
 ```
+
 
 # Background 
 
@@ -1545,7 +1558,7 @@ h2 <- ggplot(pv_TPM_D8, aes(x=number_mapped_orthologs)) +
   labs(y="Number of Genes\nwith Orthologs", x="Number of Orthologs",title = "P.vivax Genome") +
   theme_classic()
 
-# svglite("figures/uncorrected/pvivax_vs_pfalciparum_orthologs_histogram.svg", height = 5, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+# svglite("figures/uncorrected/results/pvivax_vs_pfalciparum_orthologs_histogram.svg", height = 5, width = 10, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 h1 + h2
 # dev.off()
 ```
@@ -1580,7 +1593,7 @@ pf_TPM_D6 <- pf_TPM_D6 %>%
   select(gene_id, p_vivax_ortholog, ortholog_expression_category,
          Day6_Heps_S1_Pf:gene_name, everything()) 
 
-# write.csv(pf_TPM_D6, "pvivax_vs_pfalciparum/pfalciparum_day6_orthologs_TPM.csv",row.names = FALSE)
+# write.csv(pf_TPM_D6, "results/pvivax_vs_pfalciparum/pfalciparum_day6_orthologs_TPM.csv",row.names = FALSE)
 
 pv_TPM_D8 <- pv_TPM_D8 %>% 
   mutate(ortholog_expression_category=case_when(
@@ -1592,7 +1605,7 @@ pv_TPM_D8 <- pv_TPM_D8 %>%
   select(gene_id, p_falciparum_ortholog, ortholog_expression_category,
          Day8_Heps_S1_Pv:gene_name, everything())
 
-# write.csv(pv_TPM_D8, "pvivax_vs_pfalciparum/pvivax_day8_orthologs_TPM.csv",row.names = FALSE)
+# write.csv(pv_TPM_D8, "results/pvivax_vs_pfalciparum/pvivax_day8_orthologs_TPM.csv",row.names = FALSE)
 ```
 
 ```{r}
@@ -1601,7 +1614,7 @@ library(ggVennDiagram)
 ```
 
 ```{r}
-# svglite::svglite("figures/uncorrected/pvivax_vs_pfalciparum_orthologs_venn.svg", height = 7, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
+# svglite::svglite("figures/uncorrected/results/pvivax_vs_pfalciparum_orthologs_venn.svg", height = 7, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"))
 ggVennDiagram(ortholog_list,
               label_alpha=0,
               set_color=c(viridis::viridis(n = 1, begin=0.4),
@@ -1653,6 +1666,8 @@ ns: p > 0.05
 ****: p <= 0.0001
 
 ```{r}
+# negLog10P > threshold
+threshold <- 1.2
 negLog10P_table <- data.frame(p.value=c(0.05,0.01,0.001,0.0001)) %>% 
   mutate(negLog10P=-log10(p.value))
 
@@ -1696,29 +1711,67 @@ orthologs_go <- purrr::map(names(ortholog_cats), function(group){
 })
 
 names(orthologs_go) <- names(ortholog_cats)
-```
 
-```{r}
-orthologs_go
+# sapply(orthologs_go, function(df) table(df$qvalue < 0.05))
+# sapply(orthologs_go, function(df) table(df$qvalue < 0.2))
 
-sapply(orthologs_go, function(df) table(df$qvalue < 0.05))
-sapply(orthologs_go, function(df) table(df$qvalue < 0.2))
-```
-
-```{r}
 orthologs_go_df <- bind_rows(orthologs_go)
-
-# orthologs_go_df
-# write.csv(orthologs_go_df, "pvivax_vs_pfalciparum/orthologs_go_ClusterProfiler_AllOntology.csv", row.names = FALSE)
-# table(orthologs_go_df$ortholog_expression_category)
+dim(orthologs_go_df)
 ```
 
 ```{r}
+orthologs_go_df <- read.csv("results/pvivax_vs_pfalciparum/orthologs_go_ClusterProfiler_AllOntology_01.17.2023.csv") %>% 
+     mutate(neg_log10_q=-log10(qvalue),
+            neg_log10_p=-log10(pvalue))
+
+# write.csv(orthologs_go_df, "results/pvivax_vs_pfalciparum/orthologs_go_ClusterProfiler_AllOntology.csv", row.names = FALSE)
+# table(orthologs_go_df$ortholog_expression_category)
+
+dim(orthologs_go_df) # 1345   12
+```
+
+```{r}
+chk <- orthologs_go_df %>% 
+  filter(ontology != "N/A", qvalue < 0.2) 
+
+
+table(chk$ortholog_expression_category,chk$neg_log10_p > threshold) # 15 need to be removed
+  
+dim(chk) # 192
+
+quantile_df <- function(x, probs = c(0, 0.5,  1)) {
+ tibble(quantile = probs, value = round(quantile(x, probs), digits = 2))
+}
+
+chk %>% 
+  filter(ontology != "N/A",
+        qvalue < 0.2, neg_log10_p > threshold) %>%
+  select(ortholog_expression_category, pvalue, p.adjust) %>% 
+  group_by(ortholog_expression_category) %>%
+  reframe(across(starts_with("p"), quantile_df, .unpack = TRUE))
+```
+
+```{r}
+chk %>% 
+  filter(ortholog_expression_category == 'pv_only') %>% 
+  # select(go_term_name, pvalue, p.adjust) %>% 
+  View()
+```
+
+```{r}
+orthologs_go <- purrr::map(unique(orthologs_go_df$ortholog_expression_category) %>% set_names(., values=.), 
+                           function(x) filter(orthologs_go_df, ortholog_expression_category == x))
+
+
 p <- purrr::map(names(orthologs_go), function(group){
   
   df <- orthologs_go[[group]] %>% 
     filter(ortholog_expression_category == group) %>% 
-    filter(ontology != "N/A", qvalue < 0.2) %>% 
+    filter(
+            ontology != "N/A",
+           qvalue < 0.2,
+           # neg_log10_p > threshold
+           ) %>%
     mutate(setSize=as.integer(setSize)) %>% 
     dplyr::arrange(pvalue)
   
@@ -1726,6 +1779,8 @@ p <- purrr::map(names(orthologs_go), function(group){
     print(clusterProfiler_bubble_plots(df,pval_column = "pvalue", Filter=FALSE) +
       plot_annotation(title = paste0("Ortholog Expression Group: ",group)))
     # dev.off()
+    
+    return(df)
 })
 ```
 
@@ -1735,20 +1790,7 @@ p <- purrr::map(names(orthologs_go), function(group){
 I think I need to consider best practices here... not sure yet. 
 
 ```{bash}
-DEST="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage"
-rsync -av DEGs $DEST
-rsync -av figures $DEST
-rsync -av presentations $DEST
-rsync -av expression_data/gene_annots/ $DEST/expression_data/gene_annots
-rsync -av pvivax_vs_pfalciparum $DEST
-```
-
-```{bash}
-DEST="/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage"
-
-rsync -av expression_data \
-  --include "kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS" \
-  --include "gene_annots" $DEST --dry-run
+./rsync.sh
 ```
 
 
