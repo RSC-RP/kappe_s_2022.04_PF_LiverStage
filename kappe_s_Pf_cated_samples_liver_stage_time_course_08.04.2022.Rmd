@@ -30,6 +30,7 @@ library(gridExtra)
 library(ggpubr)
 library(patchwork)
 library(ComplexHeatmap)
+library(circlize)
 
 library(limma)
 library(edgeR)
@@ -789,28 +790,84 @@ create_motif_enr_plots <- function(enr_df,
 }
 ```
 
-
-# Sample Manifest and Expression Data
-
 ```{r}
-pf_samples <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sample_manifest_7.25.2022.csv") %>% 
-  set_rownames(.$sample_id_cat)
+clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
+                                         label="go_term_name",Filter=TRUE){
+    
+    column <- glue::glue("Neg_log10_{pval_column}")
+    temp <- data.frame()
+    input <- df %>% 
+      dplyr::mutate( !!column := -log10(!!as.name(pval_column)))
+    
+    if(Filter){
+      temp <- input %>%
+        dplyr::filter( !!as.name(pval_column) < 0.05)
+    }
+    
+    if (nrow(temp) == 0){
+        temp <- input
+    }
 
-dim(pf_samples)
-table(pf_samples$analysis_group)
+    n <- min(10,nrow(temp))
+    temp <- temp %>%
+      mutate(ID=factor(ID, levels = rev(ID))) %>%
+      dplyr::slice(1:n)
+
+    bubble_plot <- ggplot(temp,
+                          aes_string(x=column,
+                                     y="ID")) +
+      geom_point(aes(size=setSize, fill=ID), shape=21,
+                 alpha=0.8) +
+      scale_radius(range=c(1,10)) +
+      labs(x=glue::glue("-log10({pval_column})"), y="") +
+      scale_y_discrete(expand = c(0.1,0)) +
+      scale_x_continuous(expand = c(0.15,0)) +
+      guides(fill="none",
+             size=guide_legend(title = "Number of Genes",
+                               size = 1)) +
+      theme(legend.position = "left",
+            legend.key = element_rect(colour = NA, fill = NA),
+            plot.title = element_text(hjust = 0),
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            panel.grid.major = element_line(color="black",size = 0.1),
+            panel.background = element_rect(fill="white"),
+            panel.border = element_rect(color="black", fill=NA)) 
+
+
+    tab <-  ggplot(temp, aes_string(x = "0", y = "ID", 
+                             label=label, 
+                             color="ontology")) +
+        geom_text(size = 4,
+                  hjust = 0,
+                  nudge_x = 0)  +
+        scale_y_discrete(expand = c(0.1,0)) +
+        scale_color_manual(values=c("Biological_Process"="tomato","Cellular_Component"="forestgreen",
+                                    "Molecular_Function"="dodgerblue","N/A"="grey")) +
+        # scale_x_continuous(expand = c(0,1)) +
+        scale_x_continuous(expand = expansion(mult = c(0,0.01))) +
+        theme_void()
+
+    bubble_plot +
+      tab +
+      plot_layout(widths = c(1, 2.5), guides='collect') &
+      theme(legend.position='left')
+    
+}
+
+replace_long_strings <- function(string){
+  t <- string
+  if(grepl(",", t)){
+    at <- stringr::str_locate_all(t,",")[[1]][,"end"]
+  }else{
+    at <- stringr::str_locate_all(t," ")[[1]][,"end"]
+  }
+  at <- at[at <= 40][length(at[at <= 40])]
+  stringr::str_sub(t, start=at[1],end = at[1]) <- "\n"
+  t
+}
 ```
 
-```{r}
-cb_se <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS")
-
-# cb_se
-```
-
-```{r}
-cb_eset <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_expressionSet.RDS")
-
-# cb_eset
-```
 
 # Reference Data
 
@@ -869,59 +926,73 @@ names(genome) <- cleaned_levs
 ```{r}
 #subset the promoters for those -1000bp upstream to TSS and those in plasmodium 
 promoters_gr <- promoters(edb, upstream=1000, downstream = 0)
-pf_proms_gr <- promoters_gr[promoters_gr$gene_id %in% rowData(cb_se)[["gene_id"]]]
-# length(pf_proms_gr)
-
-#ensure same seqlevels and seqlengths are present
-seqlevels(pf_proms_gr) <- names(genome)
-seqlengths(pf_proms_gr) <- width(genome)
-pf_proms_gr <- trim(pf_proms_gr) #some ranges are outside the expected lengths of Pf3D7_MIT_v3
-
-length(pf_proms_gr) #5,258
-```
-
-```{r}
-pf_names <- rowData(cb_se) %>% 
-  as.data.frame() %>% 
-  select(gene_name, gene_id)
-
-human_mouse_genes <- AnnotationDbi::select(edb,
-                                    keys=AnnotationDbi::keys(edb),
-       columns=c("GENEID","ENTREZID","SYMBOL"), 
-       keytype = "GENEID") %>% 
-  janitor::clean_names() %>% 
-  mutate(genome=case_when(
-    grepl("^ENSG[0-9]+", geneid) ~ "human",
-    grepl("^ENSMUSG[0-9]+", geneid) ~ "mouse",
-    grepl("^PF3D7_", geneid) ~ "plasmodium",
-  )) %>% 
-  left_join(., pf_names, by=c("geneid"="gene_id")) %>% 
-  mutate_at(vars(symbol),~ifelse(is.na(symbol) & !is.na(gene_name), gene_name, .)) %>% 
-  mutate_at(vars(symbol), ~toupper(.))
-
-# human_mouse_genes %>% head()
-# human_mouse_genes %>% tail()
-# dim(human_mouse_genes)
-table(human_mouse_genes$genome)
-```
-
-```{r}
-conflicted::conflict_prefer("filter","dplyr")
-conflicted::conflict_prefer("select","dplyr")
-conflicted::conflict_prefer("arrange","dplyr")
-conflicted::conflict_prefer("mutate","dplyr")
-conflicted::conflict_prefer("intersect","base")
 ```
 
 ```{r}
 # See https://doi.org/10.1371/journal.ppat.1001165.s019 for info used to map old IDs to new IDs on Plasmo DB
 ap2_ids <- 
-  # read.csv("ap2_old_ids_updated_PF3D7.csv") %>% 
-  read.csv("expression_data/gene_annots/AP2_old_IDs_updated_PF3D7_IDs.csv") %>%
+  read.csv("resources/gene_annots/ap2_old_ids_updated_PF3D7_2023.10.23.csv") %>%
   janitor::clean_names()
 
 head(ap2_ids)
 dim(ap2_ids) # 18 10
+```
+
+
+# Sample Manifest 
+
+```{r}
+pf_samples <- read.csv("samples/Kappe_s_2022.04_PF_LiverStage_ParasitesPaper_sample_manifest_7.25.2022.csv") %>% 
+  set_rownames(.$sample_id_cat)
+
+dim(pf_samples)
+table(pf_samples$analysis_group)
+```
+
+# Expression Data
+
+```{r}
+cb_se <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS")
+
+# cb_se
+```
+
+```{r}
+cb_eset <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_expressionSet.RDS")
+
+# cb_eset
+```
+
+```{r}
+# design for time-series analysis with MaSigPro
+design_input <- colData(cb_se) %>% 
+  as_tibble() %>%
+  dplyr::select(sample_id_cat, 
+                analysis_group_id,
+                infection_status,
+                analysis_factor_group,
+                Time=time_point) %>% 
+  group_by(Time) %>% 
+  mutate(masigpro_id=paste("Pf",  Time, 
+                           paste0("Rep", 1:n()), sep="_")) %>% 
+  ungroup() %>% 
+  mutate(Time=as.numeric(gsub("Day", "", Time)),
+         Replicate=as.numeric(analysis_factor_group),
+         Group=1) %>% 
+         # Control=ifelse(Time==0, 1, 0),
+         # Infection=ifelse(Time==0, 0, 1)) %>% 
+  ungroup() %>% 
+  arrange(Time) %>% 
+  dplyr::select(masigpro_id, everything()) %>% 
+  as.data.frame() %>% 
+  set_rownames(.$masigpro_id)
+  
+head(design_input)
+
+
+expression <- log2(assay(cb_se,"cpm")+1)[,design_input$sample_id_cat]
+colnames(expression) <- rownames(design_input)
+# head(expression[,1:7])
 ```
 
 
@@ -1077,41 +1148,9 @@ expression changes and significant differences between experimental groups.
 
 The data.abiotic object is a matrix with normalized gene expression data.
 
-```{r}
-design_input <- colData(cb_se) %>% 
-  as_tibble() %>%
-  dplyr::select(sample_id_cat, 
-                analysis_group_id,
-                infection_status,
-                analysis_factor_group,
-                Time=time_point) %>% 
-  group_by(Time) %>% 
-  mutate(masigpro_id=paste("Pf",  Time, 
-                           paste0("Rep", 1:n()), sep="_")) %>% 
-  ungroup() %>% 
-  mutate(Time=as.numeric(gsub("Day", "", Time)),
-         Replicate=as.numeric(analysis_factor_group),
-         Group=1) %>% 
-         # Control=ifelse(Time==0, 1, 0),
-         # Infection=ifelse(Time==0, 0, 1)) %>% 
-  ungroup() %>% 
-  arrange(Time) %>% 
-  dplyr::select(masigpro_id, everything()) %>% 
-  as.data.frame() %>% 
-  set_rownames(.$masigpro_id)
-  
-head(design_input)
-
-
-expression <- log2(assay(cb_se,"cpm")+1)[,design_input$sample_id_cat]
-colnames(expression) <- rownames(design_input)
-# head(expression[,1:7])
-```
-
-
 ## All Days 
 
-```{r}
+```{r eval=FALSE}
 pf_design <- make.design.matrix(dplyr::select(design_input,Time:Group),
                                 degree = 1)
 
@@ -1152,7 +1191,7 @@ You can use option ”each” to analyze the type of responses present in the si
   * genes associated to the variable ”Time2” will show a change in
 the linear response that might be indicating transitory or saturation responses
 
-```{r}
+```{r eval=FALSE}
 ## This will obtain all sigificant genes regardless the Rsquared value.
 sigs_all <- get.siggenes(tstep,
                      rsq = 0.6, 
@@ -1165,9 +1204,7 @@ dim(sigs_all_df) #293 genes
 length(sigs_all$summary)
 head(sigs_all$summary)
 # quantile(sigs_all_df$`p-value`, na.rm=TRUE)
-```
 
-```{r}
 ## This will obtain sigificant genes per experimental group
 sigs_each <- get.siggenes(tstep,
                      rsq = 0.6, 
@@ -1180,7 +1217,7 @@ dim(sigs_each$summary) #293
 
 Data clustering can be done on the basis of either the original expression values, the regression coefficients, or the t.scores.
 
-```{r fig.height=10, fig.width=10}
+```{r fig.height=10, fig.width=10, eval=FALSE}
 gene_clusters <- see.genes(data = sigs_all$sig.genes,
           show.fit = FALSE,
           dis = pf_design$dis,
@@ -1194,7 +1231,7 @@ gene_clusters <- see.genes(data = sigs_all$sig.genes,
 
 ### Expression plots 
 
-```{r}
+```{r eval=FALSE}
 expn <- sigs_all$sig.genes$sig.profiles  %>% 
   rownames_to_column("gene_id") %>% 
   add_column(cluster=gene_clusters$cut, .before=2) %>% 
@@ -1214,7 +1251,6 @@ expn <- sigs_all$sig.genes$sig.profiles  %>%
 
 head(expn)
 ```
-
 
 ```{r fig.height=10, fig.width=14, eval=FALSE}
 # pdf("figures/combat_seq/kappe_s_maSigPro_time_course_expression_per_cluster.pdf", height = 10, width = 14)
@@ -1793,81 +1829,9 @@ library(clusterProfiler)
 ```
 
 ```{r}
-clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
-                                         label="go_term_name",Filter=TRUE){
-    
-    column <- glue::glue("Neg_log10_{pval_column}")
-    temp <- data.frame()
-    input <- df %>% 
-      dplyr::mutate( !!column := -log10(!!as.name(pval_column)))
-    
-    if(Filter){
-      temp <- input %>%
-        dplyr::filter( !!as.name(pval_column) < 0.05)
-    }
-    
-    if (nrow(temp) == 0){
-        temp <- input
-    }
-
-    n <- min(10,nrow(temp))
-    temp <- temp %>%
-      mutate(ID=factor(ID, levels = rev(ID))) %>%
-      dplyr::slice(1:n)
-
-    bubble_plot <- ggplot(temp,
-                          aes_string(x=column,
-                                     y="ID")) +
-      geom_point(aes(size=setSize, fill=ID), shape=21,
-                 alpha=0.8) +
-      scale_radius(range=c(1,10)) +
-      labs(x=glue::glue("-log10({pval_column})"), y="") +
-      scale_y_discrete(expand = c(0.1,0)) +
-      scale_x_continuous(expand = c(0.15,0)) +
-      guides(fill="none",
-             size=guide_legend(title = "Number of Genes",
-                               size = 1)) +
-      theme(legend.position = "left",
-            legend.key = element_rect(colour = NA, fill = NA),
-            plot.title = element_text(hjust = 0),
-            panel.grid.major.x = element_blank(),
-            panel.grid.minor.x = element_blank(),
-            panel.grid.major = element_line(color="black",size = 0.1),
-            panel.background = element_rect(fill="white"),
-            panel.border = element_rect(color="black", fill=NA)) 
-
-
-    tab <-  ggplot(temp, aes_string(x = "0", y = "ID", 
-                             label=label, 
-                             color="ontology")) +
-        geom_text(size = 4,
-                  hjust = 0,
-                  nudge_x = 0)  +
-        scale_y_discrete(expand = c(0.1,0)) +
-        scale_color_manual(values=c("Biological_Process"="tomato","Cellular_Component"="forestgreen",
-                                    "Molecular_Function"="dodgerblue","N/A"="grey")) +
-        # scale_x_continuous(expand = c(0,1)) +
-        scale_x_continuous(expand = expansion(mult = c(0,0.01))) +
-        theme_void()
-
-    bubble_plot +
-      tab +
-      plot_layout(widths = c(1, 2.5), guides='collect') &
-      theme(legend.position='left')
-    
-}
-
-replace_long_strings <- function(string){
-  t <- string
-  if(grepl(",", t)){
-    at <- stringr::str_locate_all(t,",")[[1]][,"end"]
-  }else{
-    at <- stringr::str_locate_all(t," ")[[1]][,"end"]
-  }
-  at <- at[at <= 40][length(at[at <= 40])]
-  stringr::str_sub(t, start=at[1],end = at[1]) <- "\n"
-  t
-}
+# threshold for -log10(p) values 
+# this is p ~= 0.06
+threshold <- 1.2
 ```
 
 ```{r}
@@ -1952,19 +1916,34 @@ bc2
 ```
 
 ```{r}
+chk <- day2_go_clean %>% 
+  filter(Direction == "Enriched_Day2") %>%
+  filter(p.adjust < 0.05) %>% 
+  mutate(neg_log10_p=-log10(pvalue))
+
+quantile(chk$p.adjust)
+table(chk$neg_log10_p > threshold)
+```
+
+```{r}
 layout <- "
 BCCC
 DDD#
 "
 
+# Note - the Filter=TRUE filters the supplied pval_column < 0.05
 d2_up <- day2_go_clean %>% 
   filter(Direction == "Enriched_Day2") %>% 
-  clusterProfiler_bubble_plots(.,label = "labels")  +
+  clusterProfiler_bubble_plots(.,label = "labels",
+                               pval_column="p.adjust",
+                               label="go_term_name",Filter=TRUE)  +
   labs(title = "GO Terms Enriched in Day 2")
 
 d2_down <- day2_go_clean %>%
   filter(Direction == "Enriched_SPZ") %>%
-  clusterProfiler_bubble_plots(.,label = "labels") +
+  clusterProfiler_bubble_plots(.,label = "labels",
+                               pval_column="p.adjust",
+                               label="go_term_name",Filter=TRUE) +
   labs(title = "GO Terms Enriched in Sporozoite")
 
 # svglite("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_bubblePlot_barcode_Day2.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 7, width = 11.5)
@@ -2049,7 +2028,10 @@ cluster_go_dfs <-  read.csv("results/GO_enrichment/timecourse/time_course_cluste
     TRUE ~ go_term_name
   )) %>% 
   dplyr::arrange(desc(len))
+
+dim(cluster_go_dfs) # 175 GO terms
 ```
+
 
 ```{r}
 cluster_go_dfs %>% 
@@ -2069,6 +2051,7 @@ cluster_go_dfs %>%
 # write.csv(.,results/GO_enrichment/time_course_clusters_clusterProfiler_SigResults_Summary.csv", row.names = FALSE)
 ```
 
+
 ```{r}
 p <- purrr::map(unique(cluster_go_dfs$cluster_number), function(clust){
   df <- cluster_go_dfs %>% 
@@ -2085,11 +2068,17 @@ p <- purrr::map(unique(cluster_go_dfs$cluster_number), function(clust){
 ```
 
 ```{r}
+# quick reminder on -log10(p) threshold
+print(threshold)
+```
+
+```{r}
 top_paths <- cluster_go_dfs %>% 
    mutate(neg_log10_q=-log10(qvalue),
           neg_log10_p=-log10(pvalue)) %>% 
   group_by(cluster_number) %>% 
-  dplyr::filter( qvalue < 0.2 ) %>% 
+  dplyr::filter(neg_log10_p > threshold) %>% 
+  # dplyr::filter( qvalue < 0.2 ) %>% 
   # filter(p.adjust < 0.05 | pvalue < 0.05) %>% 
   dplyr::arrange(desc(neg_log10_q), .by_group = TRUE) %>% 
   dplyr::slice(1:10) %>% 
@@ -2103,12 +2092,15 @@ top_paths <- cluster_go_dfs %>%
          ), 
          setSize_clean=ifelse(setSize > 20, 20, setSize))
 
-# dim(top_paths)
-head(top_paths)
+dim(top_paths) #  65 18
+# head(top_paths)
 # table(duplicated(top_paths$ID))
 # table(top_paths$text_color)
 # table(top_paths$cluster_number)
-quantile(top_paths$setSize, probs = seq(0,1, length.out=11))
+# quantile(top_paths$setSize, probs = seq(0,1, length.out=11))
+quantile(top_paths$p.adjust)
+quantile(top_paths$pvalue)
+table(top_paths$neg_log10_p > threshold)
 ```
 
 ```{r fig.width=12, fig.height=6}
@@ -2647,6 +2639,7 @@ In the first step in constructing a PWM, a basic position frequency matrix (PFM)
 
 From the PFM, a position probability matrix (PPM) can now be created by dividing that former nucleotide count at each position by the number of sequences, thereby normalising the values. 
 
+## Input Datasets 
 
 ```{r eval=TRUE}
 # Prepare data for HOMER
@@ -2720,6 +2713,50 @@ dir.create("results/motif_analysis/homer/day2/down",recursive = T, showWarnings 
 #               sep="\t", quote=FALSE, row.names = FALSE)
 ```
 
+## Promoter Sequences 
+
+```{r warning=FALSE, message=FALSE}
+#ensure same seqlevels and seqlengths are present
+pf_proms_gr <- promoters_gr[promoters_gr$gene_id %in% rowData(cb_se)[["gene_id"]]]
+seqlevels(pf_proms_gr) <- names(genome)
+seqlengths(pf_proms_gr) <- width(genome)
+pf_proms_gr <- trim(pf_proms_gr) #some ranges are outside the expected lengths of Pf3D7_MIT_v3
+
+length(pf_proms_gr) #5,258
+
+# create gene ID mappings
+pf_names <- rowData(cb_se) %>% 
+  as.data.frame() %>% 
+  select(gene_name, gene_id)
+
+human_mouse_genes <- AnnotationDbi::select(edb,
+                                    keys=AnnotationDbi::keys(edb),
+       columns=c("GENEID","ENTREZID","SYMBOL"), 
+       keytype = "GENEID") %>% 
+  janitor::clean_names() %>% 
+  mutate(genome=case_when(
+    grepl("^ENSG[0-9]+", geneid) ~ "human",
+    grepl("^ENSMUSG[0-9]+", geneid) ~ "mouse",
+    grepl("^PF3D7_", geneid) ~ "plasmodium",
+  )) %>% 
+  left_join(., pf_names, by=c("geneid"="gene_id")) %>% 
+  mutate_at(vars(symbol),~ifelse(is.na(symbol) & !is.na(gene_name), gene_name, .)) %>% 
+  mutate_at(vars(symbol), ~toupper(.))
+
+# human_mouse_genes %>% head()
+# human_mouse_genes %>% tail()
+# dim(human_mouse_genes)
+table(human_mouse_genes$genome)
+
+# annotation DBI clobbers the dplyr functions, so set those as default 
+conflicted::conflict_prefer("filter","dplyr")
+conflicted::conflict_prefer("select","dplyr")
+conflicted::conflict_prefer("arrange","dplyr")
+conflicted::conflict_prefer("mutate","dplyr")
+conflicted::conflict_prefer("intersect","base")
+```
+
+
 ## AP2 Motif Set 
 
 *PWMs:*
@@ -2763,9 +2800,11 @@ for tf in $(echo "$TFs"); do grep -E -A 4 "$tf" ppat.1001165.s019.csv | grep -v 
 ```
 
 ```{r}
-tf_dfs <- dir("references/AP2_motifs", pattern = "^P", full.names = TRUE)
-# tf_dfs <- dir("references/AP2_motifs", pattern = "^P|^M", full.names = TRUE)
-# tf_dfs
+tf_dfs <- 
+  # dir("references/AP2_motifs", pattern = "^P", full.names = TRUE)
+  dir("references/AP2_motifs", pattern = "^P|^M", full.names = TRUE)
+
+print(tf_dfs)
 
 AP2_PWMlist <- TFBSTools::PWMatrixList()
 for(df in tf_dfs){
@@ -2929,7 +2968,7 @@ pheatmap::pheatmap(ap2_mat,
 
 ```{r}
 ap2_mat_rename <- ap2_mat
-colnames(ap2_mat_rename) <- gsub("Pf_Day0","sporozoites",colnames(expn_mat)) %>% 
+colnames(ap2_mat_rename) <- gsub("Pf_Day0","sporozoites",colnames(ap2_mat)) %>% 
   gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2", .)
 
 # head(ap2_mat_rename)
@@ -3002,6 +3041,12 @@ Generally speaking, we recommend a minimum of ~100 sequences per bin as fewer se
 So for the time course clusters, I'll keep them all as 1 bin
 
 ```{r}
+# threshold for -log10(p) values 
+# this is p ~= 0.06
+threshold <- 1.2
+```
+
+```{r}
 save_monaL_plots <- function(monalisa_res, prefix){
   
     pdf(paste0(prefix,"_GC_content.pdf"), height=7, width=7)
@@ -3047,22 +3092,23 @@ dim(day2_de) #1978   20
 ```
 
 ```{r}
-# day2_enr <- readRDS("results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
-day2_enr <- motif_enrichment_workflow(targets_df = day2_de,
-                            col_to_bin = "logFC",
-                            PWMs = AP2_PWMlist,
-                            proms_gr = pf_proms_gr,
-                            genome_bs = genome,
-                            make_bins = TRUE,
-                            use_bg_regions = TRUE)
+day2_enr <- readRDS("results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
 
-# saveRDS(day2_enr, results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
+# day2_enr <- motif_enrichment_workflow(targets_df = day2_de,
+#                             col_to_bin = "logFC",
+#                             PWMs = AP2_PWMlist,
+#                             proms_gr = pf_proms_gr,
+#                             genome_bs = genome,
+#                             make_bins = TRUE,
+#                             use_bg_regions = TRUE)
+
+# saveRDS(day2_enr, "results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.RDS")
 ```
 
 ```{r}
 day2_AP2_results <- create_motif_df(motif_result_list = day2_enr, col_to_bin = "logFC")
 
-dim(day2_AP2_results) #44
+dim(day2_AP2_results) #46
 # write.csv(day2_AP2_results, "results/motif_analysis/monaLisa/day2_vs_spz_monaLisa_results.csv", row.names = FALSE)
 ```
 
@@ -3073,7 +3119,7 @@ d2p <- save_monaL_plots(day2_enr, prefix = "figures/motif_analysis/Day2_vs_SPZ")
 
 ```{r}
 p_vals <- assay(day2_enr$enrichment_res,"negLog10P")
-idx <- which(p_vals[,1] > 1.2 | p_vals[,2] > 1.2)
+idx <- which(p_vals[,1] > threshold | p_vals[,2] > threshold)
 
 # pdf("figures/motif_analysis/day2_ap2_motif_heatmap.pdf", height = 5, width = 7)
 plotMotifHeatmaps(x = day2_enr$enrichment_res[idx,], 
@@ -3086,15 +3132,14 @@ plotMotifHeatmaps(x = day2_enr$enrichment_res[idx,],
 # dev.off()
 ```
 
-
 ```{r}
 day2_sig <- day2_AP2_results %>% 
   mutate(motif = as.factor(motif),
          logFC = as.factor(logFC)) %>% 
   group_by(motif,.drop = FALSE) %>% 
-  filter(any(negLog10P >= 1.2)) %>% 
+  filter(any(negLog10P >= threshold)) %>% 
   ungroup() %>% 
-  mutate(log2enr_clean=ifelse(negLog10P >= 1.2, log2enr, NA)) %>% 
+  mutate(log2enr_clean=ifelse(negLog10P >= threshold, log2enr, NA)) %>% 
   select(motif:log2enr, log2enr_clean, everything()) %>% 
   arrange(log2enr_clean) %>% 
   mutate(motif=factor(motif, levels = unique(motif)))
@@ -3123,6 +3168,7 @@ day2_top_logos <- purrr::map(unique(day2_sig$motif), function(name){
 
 # length(day2_top_logos)
 names(day2_top_logos) <- unique(day2_sig$motif)
+
 ```
 
 ```{r}
@@ -3346,6 +3392,11 @@ profiles_with_prom_bg <- read.csv("results/motif_analysis/monaLisa/time_course_p
 ```
 
 ```{r}
+# quick reminder -log10(p) > threshold
+print(threshold)
+```
+
+```{r}
 sel_tc_hits <- with_prom_bg %>% 
   
   mutate(gene_cluster_factor=factor(gsub("cluster", "", gene_cluster), 
@@ -3356,7 +3407,7 @@ sel_tc_hits <- with_prom_bg %>%
   
   group_by(gene_cluster) %>% 
   mutate(plot_fill=case_when(
-    negLog10P > 1.2 ~ log2enr,
+    negLog10P > threshold ~ log2enr,
     TRUE ~ NA_real_)) %>% 
   ungroup() %>% 
   
@@ -3366,6 +3417,7 @@ sel_tc_hits <- with_prom_bg %>%
   
   mutate(motif_factor_groups=paste0(label,":",motif)) %>% 
   group_by(gene_cluster) %>%
+  # arrange by desc log2 enrichment values 
   arrange(desc(plot_fill), .by_group = T) %>% 
   ungroup() %>% 
   mutate(motif_factor_groups=factor(motif_factor_groups, levels=rev(motif_factor_groups))) %>% 
@@ -3376,9 +3428,10 @@ sel_tc_hits <- with_prom_bg %>%
 
 
 sel_tc_hits %>% head()
-# length(unique(sel_tc_hits$motif)) # 9 
-# table(sel_tc_hits$gene_cluster, sel_tc_hits$is_significant)
+dim(sel_tc_hits)
+length(unique(sel_tc_hits$motif)) #14 
 ```
+
 
 ```{r}
 top_motifs_per_clust <- sel_tc_hits %>% 
@@ -3404,7 +3457,7 @@ order_motifs <- c("PF13_0026") %>%
   c(.,  tail(clust_motifs$labels[clust_motifs$order], n=20)) %>% 
   unique()
 
-length(order_motifs)
+length(order_motifs) #14
 table(order_motifs %in% unique(sel_tc_hits$motif))
 table(unique(sel_tc_hits$motif) %in% order_motifs)
 ```
@@ -3649,6 +3702,11 @@ tc_line_plot_TFs
 #### Time course Profiles 
 
 ```{r}
+# -log10(p) > 1.2
+print(threshold)
+```
+
+```{r}
 sel_profile_hits <- profiles_with_prom_bg %>% 
   
   mutate(gene_cluster_factor=as.factor(combined_gene_clusters), 
@@ -3659,7 +3717,7 @@ sel_profile_hits <- profiles_with_prom_bg %>%
   
   group_by(gene_cluster) %>% 
   mutate(plot_fill=case_when(
-    negLog10P > 1.2 ~ log2enr,
+    negLog10P > threshold ~ log2enr,
     TRUE ~ NA_real_)) %>% 
   ungroup() %>% 
   
@@ -3679,14 +3737,15 @@ sel_profile_hits <- profiles_with_prom_bg %>%
          plot_fill,log2enr, everything())
 
 
+dim(sel_profile_hits)
 # head(sel_profile_hits)
 # table(sel_profile_hits$gene_cluster, sel_profile_hits$is_significant) %>% as.data.frame()
 
-sel_profile_hits %>% 
-  group_by(gene_cluster, is_significant) %>% 
-  dplyr::count() %>% 
-  pivot_wider(names_from = is_significant, 
-              values_from = n)
+# sel_profile_hits %>%
+#   group_by(gene_cluster, is_significant) %>%
+#   dplyr::count() %>%
+#   pivot_wider(names_from = is_significant,
+#               values_from = n)
 ```
 
 
@@ -4068,11 +4127,11 @@ length(unique(orthoGroups_species$taxon_clean)) #554
 Required the newest version of R Bioconductor for Uniprot.ws to work properly. 
 
 ```
-Rscript motif_analysis/uniprot.ws_lookup.R
+Rscript pbs_jobs/uniprot.ws_lookup.R
 ```
 
 ```{r}
-ortholog_search_res <- dir"results/motif_analysis/uniprot_ids",
+ortholog_search_res <- dir("results/motif_analysis/uniprot_ids",
                            pattern = "*.RDS", 
                            full.names = TRUE)
 
@@ -4288,6 +4347,13 @@ ortho_profile_motifs_dfs %>%
 
 ### Visualization Motif Enrichment / Seq Logos 
 
+#### Time course Clusters
+
+```{r}
+# negLog10P > threshold
+print(threshold)
+```
+
 ```{r}
 ortho_cluster_motifs_dfs <- read.csv("results/motif_analysis/monaLisa/time_course_orthologs_results.csv")
 
@@ -4297,7 +4363,7 @@ input <- ortho_cluster_motifs_dfs  %>%
          label = gene_cluster) %>%
   group_by(gene_cluster) %>%
   mutate(plot_fill=case_when(
-    negLog10P > 1.2 ~ log2enr,
+    negLog10P > threshold ~ log2enr,
     TRUE ~ NA_real_)) %>%
   ungroup() %>%
 
@@ -4316,9 +4382,23 @@ input <- ortho_cluster_motifs_dfs  %>%
          motif_factor_groups,
          plot_fill,log2enr, everything())
 
+dim(input)
 # head(input)
-# length(unique(input$motif))
+length(unique(input$motif)) #5
 ```
+
+
+```{r}
+chk <- sel_tc_hits %>% 
+  bind_rows(input) %>% 
+  filter(negLog10P > threshold) 
+
+dim(chk)
+quantile(chk$p_value)
+quantile(chk$adj.p_value)
+# format(quantile(chk$p_value), scientific = TRUE, digits = 2)
+```
+
 
 ```{r}
 sel_motif_annots <- read.csv("results/motif_analysis/jaspar2022_orthologs.csv")
@@ -4508,7 +4588,12 @@ tc_ortho_plots$time_ribbon + tc_ortho_plots$motif_enr +
 # dev.off()
 ```
 
-###### Time Course Profiles 
+#### Time Course Profiles 
+
+```{r}
+# negLog10P > 1.2
+print(threshold)
+```
 
 ```{r}
 ortho_profile_motifs_dfs <- read.csv("results/motif_analysis/monaLisa/time_course_profiles_orthologs_results.csv")
@@ -4518,7 +4603,7 @@ in_profiles <- ortho_profile_motifs_dfs  %>%
          label = gene_cluster) %>%
   group_by(gene_cluster) %>%
   mutate(plot_fill=case_when(
-    negLog10P > 1.2 ~ log2enr,
+    negLog10P > thresholds ~ log2enr,
     TRUE ~ NA_real_)) %>%
   ungroup() %>%
 
