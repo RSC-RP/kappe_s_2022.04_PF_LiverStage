@@ -616,7 +616,7 @@ species_genes <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_
   arrange(gene_id) %>% 
   set_rownames(.$gene_id)
 
-head(species_genes)
+# head(species_genes)
 # dim(species_genes)
 table(species_genes$genome)
 ```
@@ -626,6 +626,13 @@ pf_genes <- species_genes %>%
   filter(genome=="PF3D7")
 
 dim(pf_genes)
+table(pf_genes$gene_biotype)
+```
+
+```{r}
+pf_genes %>% 
+  filter(is.na(gene_biotype))
+  # filter(gene_id == 'PF3D7_0935400' | gene_id == 'PF3D7_0935390')
 ```
 
 
@@ -1210,6 +1217,8 @@ plt_varexp_full
 
 
 ## Barplots 
+
+--> Author of Barplot figure: Yeji Bae
 
 Non-DE: not differential expressed, has a adj.p.value > 0.05 and abs(logFC) < 1
 Not expressed: filtered out during normalization
