@@ -872,7 +872,7 @@ replace_long_strings <- function(string){
 # Reference Data
 
 ```{r}
-GO_annots <- read.delim("expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_v58.txt", sep="\t") %>% 
+GO_annots <- read.delim("resources/gene_annots/PF3D7_GO_Terms_PlasmoDB_v58.txt", sep="\t") %>% 
   janitor::clean_names()
 
 head(GO_annots)
@@ -1812,7 +1812,7 @@ GO_annots_filtered <- GO_annots %>%
   select(gene_id, ontology, go_id, N)
 
 GO_annots_filtered
-# write.csv(GO_annots_filtered,"expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_filteredSetSizes_v58.txt", row.names = F)
+# write.csv(GO_annots_filtered,"resources/gene_annots/PF3D7_GO_Terms_PlasmoDB_filteredSetSizes_v58.txt", row.names = F)
 
 GO_annots_filtered %>% 
   select(ontology, go_id) %>% 
@@ -2931,7 +2931,7 @@ ap2_expn <- expression[ap2_ids$gene_id,rownames(input_d456)] %>%
 
 
 head(ap2_expn)
-dim(ap2_expn) #238  10
+dim(ap2_expn) #252  10
 ```
 
 ```{r fig.height=10, fig.width=10, eval=FALSE}
@@ -2957,12 +2957,10 @@ rownames(ap2_mat) <- unique(ap2_expn$new_rownames)
 
 # head(ap2_mat)
 # dim(ap2_mat)
-```
 
-```{r}
 # pdf("figures/combat_seq/AP2_heatmap_log2CPM_heatmap.pdf", height = 10, width = 10)
-pheatmap::pheatmap(ap2_mat,
-                   annotation_col = select(design_input, analysis_factor_group))
+# pheatmap::pheatmap(ap2_mat,
+#                    annotation_col = select(design_input, analysis_factor_group))
 # dev.off()
 ```
 
@@ -2993,10 +2991,11 @@ gene_anno <- select(ap2_expn, gene_id=new_rownames, gene_name_or_symbol) %>%
   as.data.frame() %>% 
   set_rownames(.$new_rownames)
 
-s_ord <- c("sporozoites_Rep1", "sporozoites_Rep2", "sporozoites_Rep3", "sporozoites_Rep4", "sporozoites_Rep5", 
+s_ord <- c(paste0("sporozoites_Rep",1:5),
+           # "sporozoites_Rep3", "sporozoites_Rep5", "sporozoites_Rep1", "sporozoites_Rep2", "sporozoites_Rep4",
            "Day4_Pf_LS_Rep3",  "Day4_Pf_LS_Rep1",  "Day4_Pf_LS_Rep2",
-           "Day5_Pf_LS_Rep2",  "Day5_Pf_LS_Rep3", "Day5_Pf_LS_Rep1" , 
-           "Day6_Pf_LS_Rep1",  "Day6_Pf_LS_Rep2" , "Day6_Pf_LS_Rep3")
+           "Day5_Pf_LS_Rep3",  "Day5_Pf_LS_Rep2", "Day5_Pf_LS_Rep1" , 
+           "Day6_Pf_LS_Rep3",  "Day6_Pf_LS_Rep1" , "Day6_Pf_LS_Rep2")
 ```
 
 
@@ -3015,8 +3014,8 @@ ap2_complexHmap <- create_pf_heatmaps(TMMCPM = ap2_mat_rename,
                    center_scale = TRUE)
 
 
-# png(paste0("figures/combat_seq/AP2_expression/AP2_heatmap_row_zscores_heatmap.png"),units="in", height = 10, width = 15, res=150)
-# svglite(paste0("figures/combat_seq/AP2_expression/AP2_heatmap_row_zscores_heatmap.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 10, width = 15)
+# png(paste0("figures/combat_seq/AP2_expression/AP2_heatmap_row_zscores_heatmap.png"),units="in", height = 15, width = 15, res=150)
+# svglite(paste0("figures/combat_seq/AP2_expression/AP2_heatmap_row_zscores_heatmap.svg"),fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 15, width = 15)
 ap2_complexHmap$heatmap + ap2_complexHmap$hmap_anno$geneLabels
 # dev.off()
 ```
@@ -3168,7 +3167,6 @@ day2_top_logos <- purrr::map(unique(day2_sig$motif), function(name){
 
 # length(day2_top_logos)
 names(day2_top_logos) <- unique(day2_sig$motif)
-
 ```
 
 ```{r}
@@ -3284,20 +3282,17 @@ for (profile in profile_nums){
 ```
 
 ```{r}
+# Clusters 
 with_prom_bg <- purrr::map_dfr(cluster_motifs, create_motif_df)
-
 # write.csv(with_prom_bg,"results/motif_analysis/monaLisa/time_course_ap2_results.csv", row.names = FALSE)
 
 with_prom_bg %>%
-  # filter(gene_cluster=="cluster7") %>%
   filter(negLog10P > 1.2) %>%
   group_by(gene_cluster) %>%
   dplyr::slice(1)
-```
 
-```{r}
+# Profiles 
 profiles_with_prom_bg <- purrr::map_dfr(profile_motifs, create_motif_df, col_to_bin="combined_gene_clusters")
-
 # write.csv(profiles_with_prom_bg, "results/motif_analysis/monaLisa/time_course_profiles_ap2_results.csv", row.names=FALSE)
 
 profiles_with_prom_bg %>% 
@@ -3341,7 +3336,7 @@ cluster_hits_enr <- with_prom_bg %>%
     arrange(gene_cluster, desc(negLog10P))
     
 dim(cluster_hits_enr)
-# write.csv(cluster_hits_enr, results/motif_analysis/monaLisa/time_course_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
+# write.csv(cluster_hits_enr, "results/motif_analysis/monaLisa/time_course_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
 ```
 
 ```{r}
@@ -3362,7 +3357,6 @@ motif_hits_profiles <- purrr::map_dfr(names(profile_motifs), function(motif_res)
     select(motif=pwmid,
            combined_gene_clusters,
            transcript_hits)
-
 })
 ```
 
@@ -3374,12 +3368,11 @@ profile_hits_enr <- profiles_with_prom_bg %>%
            sumForegroundWgtWithHits:sumBackgroundWgtWithHits,
            everything()) %>%
     arrange(combined_gene_clusters, desc(negLog10P))
-```
 
-```{r}
-head(profile_hits_enr)
 dim(profile_hits_enr)
-# write.csv(profile_hits_enr, results/motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
+head(profile_hits_enr)
+
+# write.csv(profile_hits_enr, "results/motif_analysis/monaLisa/time_course_profiles_ap2_withTranscriptIDs_results.csv", row.names = FALSE)
 ```
 
 ### Visualization 
@@ -3429,17 +3422,7 @@ sel_tc_hits <- with_prom_bg %>%
 
 sel_tc_hits %>% head()
 dim(sel_tc_hits)
-length(unique(sel_tc_hits$motif)) #14 
-```
-
-
-```{r}
-top_motifs_per_clust <- sel_tc_hits %>% 
-  group_by(gene_cluster_factor) %>% 
-  dplyr::slice(1) %>% 
-  pull(motif, name=motif_factor_groups)
-
-# top_motifs_per_clust
+length(unique(sel_tc_hits$motif)) #15
 ```
 
 ```{r fig.height=4, fig.width=10}
@@ -3449,15 +3432,13 @@ vals <- sel_tc_hits %>%
 
 clust_motifs <- hclust(dist(vals, method="euclidean"))
 plot(clust_motifs)
-```
 
-```{r}
 order_motifs <- c("PF13_0026") %>% 
   c(., clust_motifs$labels[clust_motifs$order][1:2]) %>% 
   c(.,  tail(clust_motifs$labels[clust_motifs$order], n=20)) %>% 
   unique()
 
-length(order_motifs) #14
+length(order_motifs) #15
 table(order_motifs %in% unique(sel_tc_hits$motif))
 table(unique(sel_tc_hits$motif) %in% order_motifs)
 ```
@@ -3466,6 +3447,8 @@ table(unique(sel_tc_hits$motif) %in% order_motifs)
 top_motifs_per_clust_df <- sel_tc_hits %>% 
   group_by(gene_cluster) %>% 
   dplyr::slice(1) 
+
+# dim(top_motifs_per_clust_df)
 
 ap2_expn_top_hits <- purrr::map(top_motifs_per_clust_df$gene_cluster_factor,function(x){
   subset <- top_motifs_per_clust_df %>% 
@@ -3504,7 +3487,6 @@ ap2_summary_stats <- ap2_expn_top_hits %>%
          motif,masigpro_id,
          stat,ymin:ymax, mean=log2_CPM) 
 
-
 tc_summary_stats <- expn_d456 %>% 
   mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
   group_by(gene_cluster_factor, analysis_factor_group) %>% 
@@ -3539,7 +3521,7 @@ tc_summary_stats <- expn_d456 %>%
 
 ```{r fig.height=10, fig.width=10}
 n <- length(unique(sel_tc_hits$motif))
-motif_colors <-  rep("grey50", 14) %>% 
+motif_colors <-  rep("grey50", n) %>% 
   set_names(unique(sel_tc_hits$motif))
 motif_colors[c("time-course cluster")] <- "green2"
 
@@ -3586,7 +3568,7 @@ wdts <- c(0.6,0.6,0.75)
 
 
 # svglite("figures/motif_analysis/time_point_cluster_heatmap_seqlogos_tileplot_rows.svg", height = 20, width=20,
-        # system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+# system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
 tc_AP2_plots$time_cluster + 
   tc_AP2_plots$motif_enr + #theme(axis.text.x = element_text(size=7, angle=45)) +
   tc_AP2_plots$top_logos[[1]] +
@@ -3603,7 +3585,7 @@ tc_AP2_plots$time_cluster +
 
 
 # svglite("figures/motif_analysis/time_point_cluster_ap2_heatmap_seqlogos_tileplot_rows.svg", height = 20, width=20,
-        # system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
+# system_fonts = list(sans = "Open Sans"),fix_text_size=FALSE)
 tc_AP2_plots$time_ribbon + 
   tc_AP2_plots$motif_enr + #theme(axis.text.x = element_text(size=7, angle=45)) +
   tc_AP2_plots$top_logos[[1]] +
@@ -3748,16 +3730,6 @@ dim(sel_profile_hits)
 #               values_from = n)
 ```
 
-
-```{r}
-top_motifs_per_clust <- sel_profile_hits %>% 
-  group_by(gene_cluster) %>% 
-  dplyr::slice(1) %>% 
-  pull(motif, name=motif_factor_groups)
-
-# top_motifs_per_clust
-```
-
 ```{r fig.height=4, fig.width=10}
 vals <- sel_profile_hits %>% 
   mutate(plot_fill=ifelse(is.na(plot_fill), 0, plot_fill)) %>% 
@@ -3784,7 +3756,7 @@ ap2_expn <- expression[ap2_ids$gene_id,rownames(input_d456)] %>%
 
 
 head(ap2_expn)
-dim(ap2_expn) #238  10
+dim(ap2_expn) #252  10
 ```
 
 ```{r}
@@ -4095,7 +4067,7 @@ length(unique(GO_annots_TF$gene_id))
 
 
 ```{r}
-orthoGroups <- read.csv("expression_data/gene_annots/PF3D7_OrthoMCL_IDs_Summary.csv") %>% 
+orthoGroups <- read.csv("resources/gene_annots/PF3D7_OrthoMCL_IDs_Summary.csv") %>% 
   janitor::clean_names() %>% 
   filter(!grepl("N\\/A", ortholog_group)) %>% 
   dplyr::select(ortholog_group,gene_id, uni_prot_id_s, everything())

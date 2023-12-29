@@ -685,7 +685,7 @@ pf_species_genes <- read.csv("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_gen
 ```
 
 ```{r}
-orthologs <- read.csv("expression_data/gene_annots/PVP01_PF3D7_GenesByOrthologs_Summary.csv") %>% 
+orthologs <- read.csv("resources/gene_annots/PVP01_PF3D7_GenesByOrthologs_Summary.csv") %>% 
   janitor::clean_names() %>% 
   filter(!duplicated(gene_id))
 
@@ -694,7 +694,7 @@ dim(orthologs) #4485   10
 ```
 
 ```{r}
-pv_orthologs <- read.csv("expression_data/gene_annots/PF3D7_PVP01_GenesByOrthologs_Summary.csv") %>% 
+pv_orthologs <- read.csv("resources/gene_annots/PF3D7_PVP01_GenesByOrthologs_Summary.csv") %>% 
     janitor::clean_names() %>% 
     filter(!duplicated(gene_id))
 
@@ -864,7 +864,7 @@ mapping_stats_long <- mapping_stats %>%
                names_to="sample_id",
                values_to="number_reads") %>% 
   rename_at(vars(gene_id), ~c("statistic")) %>% 
-  mutate_at(vars(sample_id), ~gsub("_unstrand.+","", .)) 
+  mutate_at(vars(sample_id), ~gsub("_unstrand.+","", .))
 
 mapping_stats_comparison <- mapping_stats_long %>% 
   bind_rows(., total_counts) %>% 
@@ -1564,6 +1564,14 @@ h1 + h2
 ```
 
 ```{r}
+pf_TPM_D6 %>% 
+  filter(grepl("GDV1", gene_name) | grepl("antisense", description))
+
+pv_TPM_D8 %>% 
+  filter(grepl("GDV1", gene_name) | grepl("antisense", description))
+```
+
+```{r}
 pv_exp <- pv_TPM_D8 %>% 
   filter(expression_category=="expressed", !is.na(p_falciparum_ortholog)) %>% 
   pull(p_falciparum_ortholog)
@@ -1580,6 +1588,12 @@ pf_only <- setdiff(pf_exp,pv_exp)
 pv_only <- setdiff(pv_exp,pf_exp)
 
 sapply(list(both,pv_only,pf_only), length)
+sum(sapply(list(both,pv_only,pf_only), length))
+```
+
+```{r}
+grep("PF3D7_0935390",pv_exp)
+grep("PF3D7_0935390",pf_exp)
 ```
 
 ```{r}
@@ -1606,6 +1620,14 @@ pv_TPM_D8 <- pv_TPM_D8 %>%
          Day8_Heps_S1_Pv:gene_name, everything())
 
 # write.csv(pv_TPM_D8, "results/pvivax_vs_pfalciparum/pvivax_day8_orthologs_TPM.csv",row.names = FALSE)
+```
+
+```{r}
+pf_TPM_D6 %>% 
+  filter(grepl("PF3D7_0935390", gene_id))
+
+pv_TPM_D8 %>% 
+  filter(grepl("PF3D7_0935390", p_falciparum_ortholog))
 ```
 
 ```{r}
@@ -1636,7 +1658,7 @@ library(clusterProfiler)
 ```
 
 ```{r}
-GO_annots <- read.delim("expression_data/gene_annots/PF3D7_GO_Terms_PlasmoDB_v58.txt", sep="\t") %>% 
+GO_annots <- read.delim("resources/gene_annots/PF3D7_GO_Terms_PlasmoDB_v58.txt", sep="\t") %>% 
   janitor::clean_names()
 
 head(GO_annots)

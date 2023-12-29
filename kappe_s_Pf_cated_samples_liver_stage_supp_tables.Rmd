@@ -112,7 +112,8 @@ writeData(wb,
           x = manifest,
           startCol = 1, startRow = 5,
           colNames=TRUE)
-saveWorkbook(wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_sample_manifest.xlsx", overwrite = TRUE)
+
+# saveWorkbook(wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_sample_manifest.xlsx", overwrite = TRUE)
 ```
 
 
@@ -120,12 +121,14 @@ saveWorkbook(wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental
 # Define Files to Update
 
 ```{r}
-paper_dir <- file.path("/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/Paper_Versions/Figures_layout")
+paper_dir <- file.path('/active/kappe_s/kappe/Gigliola/2022.04_jsmi26_PF_LiverStage/Paper_Versions/OLD_Paper_V1/Figures_layout/')
 
-to_update <- basename(dir(paper_dir, pattern = "*.csv", recursive = TRUE)) %>% 
+to_update <- dir(paper_dir, pattern = "*.csv", recursive = TRUE) %>% 
+  grep("Figure5/00_without_MAL8P1.153/", ., value=TRUE, invert = TRUE) %>% 
+  basename(.) %>% 
   grep("Figure2_all_Genes|conversion_table|pexel", ., value=T, invert = T)
 
-# to_update
+to_update
 ```
 
 NOTE - PEXEL analysis was completed by Eva Hesping @WEHI after I had completed some analyses. 
@@ -135,8 +138,8 @@ cmds <- glue("find . -name {to_update} -not -path './references/*' -not -path '.
 file_locations <- purrr::map(cmds, function(cmd) system(cmd, intern = TRUE))
 names(file_locations) <- to_update
 
-file_locations <- file_locations[sapply(file_locations, length) != 0] %>% 
-  c(as.list(dir("expression_data", pattern = "(PF3D7|PVP01)_TPM", full.names = TRUE)) %>% 
+file_locations <- file_locations[sapply(file_locations, length) != 0] %>%
+  c(as.list(dir("expression_data", pattern = "(PF3D7|PVP01)_TPM", full.names = TRUE)) %>%
       set_names(sapply(., basename)))
 
 # file_locations
@@ -259,11 +262,10 @@ lapply(motif_res, head)
 ```
 
 ```{r}
-motif_res_fixed <- c(motif_res_fixed[1],
+motif_res_fixed <- c(motif_res[1],
                      list("day2_vs_spz" = bind_rows(motif_res[grep("day2", names(motif_res))])),
                      list("time_course_clusters"=bind_rows(motif_res[grep("time_course_[oa]", names(motif_res))])), 
-                     list("time_course_profiles"=bind_rows(motif_res[grep("time_course_profiles", names(motif_res))]))
-                     ) 
+                     list("time_course_profiles"=bind_rows(motif_res[grep("time_course_profiles", names(motif_res))]))) 
 
 # lapply(motif_res_fixed, head)
 
@@ -284,7 +286,7 @@ purrr::map(names(motif_res_fixed), function(x){
             colNames=TRUE)
 
 })
-saveWorkbook(motif_wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_motif_enrichment.xlsx", overwrite = TRUE)
+# saveWorkbook(motif_wb, "references/Paper_Versions/Tables/2023.09_Pf_LS_supplemental_tables/kappe_s_motif_enrichment.xlsx", overwrite = TRUE)
 ```
 
 ## Reformat DEGs
