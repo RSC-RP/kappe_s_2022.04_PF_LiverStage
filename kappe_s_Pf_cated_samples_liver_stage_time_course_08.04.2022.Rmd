@@ -1677,6 +1677,15 @@ GO_annots_filtered %>%
   dplyr::count()
 ```
 
+```{r}
+GO_annots_list <- purrr::map(unique(GO_annots_filtered$go_id) %>% set_names(., value = .), function(x) { 
+  GO_annots_filtered %>% 
+    filter(go_id == x)  %>% 
+    pull(gene_id)
+})
+
+# head(GO_annots_list)
+```
 
 ## ClusterProfiler 
 
@@ -1823,13 +1832,6 @@ purrr::map(unique(day2_go_clean$ontology), function(ont, df){
   dev.off()
 })
 ```
-
-
-```{r}
-library(CBNplot)
-```
-
-day2_go_clean
 
 ### Time-course clusters 
 
@@ -2474,6 +2476,130 @@ purrr::map(names(res),function(df_ID){
 ```
 
 
+# Regulatory Networks 
+
+https://www.bioconductor.org/packages/release/bioc/vignettes/RTN/inst/doc/RTN.html
+- sample size limit??
+
+https://bioconductor.org/packages/release/bioc/vignettes/qpgraph/inst/doc/qpTxRegNet.pdf
+- Need Tfs and target genes! 
+
+https://www.bioconductor.org/packages/release/bioc/html/CBNplot.html
+- missing dependencies on POSIT 
+- uses GSEA results
+
+https://bioconductor.org/packages/release/bioc/vignettes/BioNet/inst/doc/Tutorial.pdf
+- Need PPI 
+- https://www.nature.com/articles/nature04104 
+- https://www.sciencedirect.com/science/article/pii/S221112471930909X
+
+EnrichmentBrowser
+- Need a network 
+- Could try kegg metabolic paths?
+
+```{r}
+# library(CBNplot) 
+library(RTN)
+library(BioNet)
+library(EnrichmentBrowser)
+# data(interactome) #Formal class 'graphNEL' [package "graph"] with 6 slots
+# data(dataLym)
+# BiocManager::install("EnrichmentBrowser", update = FALSE)
+# BiocManager::install("DLBCL", update = FALSE)
+# hsa.grn <- compileGRN(org="ko", db="kegg")
+# head(hsa.grn)
+```
+
+```{r}
+GO_annots_TF <- GO_annots %>% 
+  filter(grepl("transcription factor", go_term_name))
+
+# length(unique(GO_annots_TF$gene_id))
+# head(GO_annots_TF)
+```
+
+```{r}
+PPI <- openxlsx::read.xlsx("resources/PPI/1-s2.0-S221112471930909X-mmc6.xlsx") %>% 
+  mutate(TF = ifelse(source %in% GO_annots_TF$gene_id, "TF", "Other"))
+
+head(PPI)
+```
+
+```{r}
+PPI %>% 
+  select(source, TF, sourceDescription, STRING,REACTOME) %>% 
+  distinct() %>% 
+  filter(TF == "TF")
+```
+
+```{r}
+GRN <- PPI %>% 
+  select(from = source, to = target)
+
+length(unique(GRN$from)) #1512
+# head(PPI)
+# quantile(PPI$RFscore)
+```
+
+### BioNet
+
+```{r}
+pvals <- cbind(t=dataLym$t.pval, s=dataLym$s.pval)
+rownames(pvals) <- dataLym$label
+pval <- aggrPvals(pvals, order=2, plot=FALSE)
+
+
+subnet <- subNetwork(dataLym$label, interactome)
+subnet <- rmSelfLoops(subnet)
+subnet
+
+
+fb <- fitBumModel(pval, plot=FALSE)
+scores <- scoreNodes(subnet, fb, fdr=0.001)
+
+module <- runFastHeinz(subnet, scores)
+logFC <- dataLym$diff
+names(logFC) <- dataLym$label
+
+plotModule(module, scores=scores, diff.expr=logFC)
+```
+
+
+### Enrichment Browser 
+
+```{r}
+nbea.res <- nbea(method="ggea",
+                 se=cb_se,
+                 gs=GO_annots_list, 
+                 grn=GRN) 
+gsRanking(nbea.res)
+
+
+par(mfrow=c(1,2))
+ggeaGraph( gs=hsa.gs[["hsa05217_Basal_cell_carcinoma"]], grn=hsa.grn, se=allSE) 
+ggeaGraphLegend()
+```
+
+### RTN 
+
+```{r}
+data(tniData)
+tniData$rowAnnotation %>% head()
+```
+
+```{r}
+rtni <- tni.constructor(expData = tniData$expData, 
+                        regulatoryElements = GO_annots_TF$gene_id, 
+                        rowAnnotation = tniData$rowAnnotation, 
+                        colAnnotation = tniData$colAnnotation)
+
+rtni <- tni.permutation(rtni, nPermutations = 100)
+rtni <- tni.bootstrap(rtni)
+rtni <- tni.dpi.filter(rtni)
+regulons <- tni.get(rtni, what = "regulons.and.mode", idkey = "SYMBOL")
+```
+
+
 # Motif Analysis
 
 https://bioconductor.org/packages/release/bioc/vignettes/universalmotif/inst/doc/MotifManipulation.pdf
@@ -2505,7 +2631,6 @@ From the PFM, a position probability matrix (PPM) can now be created by dividing
 ## Input Datasets 
 
 ```{r eval=TRUE}
-# Prepare data for HOMER
 Day2 <- read.csv("results/DEGs/kappe_s_Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_DEGs.csv", comment.char = "#")
 
 time_course <- read.csv("results/time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv", row.names = 1) %>% 
@@ -2556,24 +2681,6 @@ gene_clusts_combined_dfs <- purrr::map(unique(time_course$combined_gene_clusters
 
 table(time_course$gene_cluster_factor,
       time_course$combined_gene_clusters)
-```
-
-```{r eval=FALSE}
-dir.create("results/motif_analysis/homer/day2/up",recursive = T,showWarnings = FALSE)
-dir.create("results/motif_analysis/homer/day2/down",recursive = T, showWarnings = FALSE)
-
-
-# Day2 %>%
-#   dplyr::filter(logFC > 0) %>%
-#   pull(gene_id) %>% 
-#   write.table(.,"results/motif_analysis/homer/day2/up/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
-#               sep="\t", quote=FALSE, row.names = FALSE)
-# 
-# Day2 %>%
-#   dplyr::filter(logFC < 0) %>%
-#   pull(gene_id) %>% 
-#   write.table(.,"results/motif_analysis/homer/day2/down/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
-#               sep="\t", quote=FALSE, row.names = FALSE)
 ```
 
 ## Promoter Sequences 
@@ -2729,18 +2836,33 @@ AP2_table_S2 <- tabulizer::extract_tables("references/AP2_motifs/AP2_TF_motif_co
 ```
 
 ```{r}
+MotifDb@elementMetadata %>% 
+  as.data.frame() %>% 
+  filter(grepl("^P", organism)) %>% 
+  group_by(organism) %>% 
+  dplyr::count() %>% 
+  arrange(desc(n))
+```
+
+```{r}
 #The MotifDb query function performs a broad, case-neutral text search through all the metadata (all the annotation) for all of the motifs. It returns a list of matching motifs. More information about the metadata is provided below.
-pf_motifs <- query(MotifDb, andStrings=(c("AP2","Pfalciparum")))
+# pf_motifs <- query(MotifDb, andStrings=c("Pfalciparum"))
+pf_motifs <- query(MotifDb, andStrings=c("vivax"))
 pf_motif_meta <- pf_motifs@elementMetadata
 # head(pf_motif_meta)
 
 # PMID: 21060817 is the same data from the supplemental files from  Campbell et al,..,.Manuel Llinás, 2010
-table(pf_motif_meta$geneSymbol)
-table(pf_motif_meta$pubmedID)
+# table(pf_motif_meta$geneSymbol)
+# table(pf_motif_meta$pubmedID)
 table(pf_motif_meta$tfFamily) #AP2 and 2 NAs
 
 #PFM position frequency matrix
 # pf_motifs@listData %>% head(.,n=2)
+```
+
+```{r}
+pf_motif_meta %>% 
+  as.data.frame() %>% 
 ```
 
 ```{r}
@@ -3902,6 +4024,24 @@ Later, this analysis directory was moved/reorganized and the paths for GTF and F
 Rebuilding the database with update paths for GTF and FASTA appears to resolve the issue... so in the future - all custom DBs should have copies of GFT and FASTA files INSIDE the homer directory, and never move them? 
 
 
+```{r eval=FALSE}
+dir.create("results/motif_analysis/homer/day2/up",recursive = T,showWarnings = FALSE)
+dir.create("results/motif_analysis/homer/day2/down",recursive = T, showWarnings = FALSE)
+
+Day2 %>%
+  dplyr::filter(logFC > 0) %>%
+  pull(gene_id) %>%
+  write.table(.,"results/motif_analysis/homer/day2/up/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_upregulated.csv",
+              sep="\t", quote=FALSE, row.names = FALSE)
+
+Day2 %>%
+  dplyr::filter(logFC < 0) %>%
+  pull(gene_id) %>%
+  write.table(.,"results/motif_analysis/homer/day2/down/Day2_Heps_Pf_vs_sporozorite_combat-seq_corrected_downregulated.csv",
+              sep="\t", quote=FALSE, row.names = FALSE)
+```
+
+
 ```{bash eval=FALSE}
 cd motif_analysis/homer/
 ./create_db.sh #only run 1x
@@ -3914,19 +4054,6 @@ family: Structural sub-class of the transcription factor, based on the TFCaT sys
 Acc: A representative protein accession number in Genbank for the transcription factor. Human takes precedence if several exists. 
 
 ## Orthologous Hits
-
-```{r}
-GO_annots_TF <- GO_annots %>% 
-  filter(grepl("DNA-binding|DNA binding|transcription factor", go_term_name))
-
-length(unique(GO_annots_TF$gene_id))
-# GO_annots_TF %>% 
-#   group_by(go_term_name, go_id) %>% 
-#   dplyr::count() %>% 
-#   arrange(desc(n)) %>% 
-#   ungroup() %>% 
-#   mutate(Total=sum(n))
-```
 
 
 ```{r}
