@@ -1824,12 +1824,11 @@ purrr::map(unique(day2_go_clean$ontology), function(ont, df){
 })
 ```
 
-
 ```{r}
-library(CBNplot)
+BiocManager::install("CBNplot", update = FALSE, verbose = TRUE)
+# library(CBNplot)
 ```
 
-day2_go_clean
 
 ### Time-course clusters 
 

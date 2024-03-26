@@ -5,6 +5,10 @@
 .Ruserdata
 .html
 
+~*
+*.gmt
+limma*
+
 # Workflow Data/Results files
 #https://stackoverflow.com/questions/40460216/how-do-i-make-git-ignore-symlink
 resources/
@@ -16,10 +20,12 @@ raw_counts/
 qc_data/
 references/
 species_genomes
-limma*
 samples/
 presentations/
-~*
-*.gmt
-*.html
-p.value_to_negLog10P_conversion_table.csv
+
+# symlinks
+expression_data
+figures
+references
+resources
+results
