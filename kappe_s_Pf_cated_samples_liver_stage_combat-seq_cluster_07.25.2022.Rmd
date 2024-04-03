@@ -525,7 +525,7 @@ dim(pf_TMMCPM)
 ```
 
 ```{r}
-create_long_format_dfs <- function(species_genes,sample_manifest_cated,
+create_long_format_dfs <- function(species_genes, sample_manifest_cated,
                                    counts_matrix_cated, TMMCPM){
   CPM_matrix_anno <- species_genes %>% 
     inner_join(., rownames_to_column(TMMCPM,"gene_id"),
@@ -557,7 +557,6 @@ pf_expression <- create_long_format_dfs(species_genes=species_genes,
                                         counts_matrix_cated=combat_matrix_cated, 
                                         TMMCPM = pf_TMMCPM)
 ```
-
 
 # Expression EDA 
 
@@ -653,6 +652,69 @@ ggplot(neg_gex, aes(x=analysis_group_id, y=log2_TMMCPM)) +
   theme(axis.text.x = element_text(angle=25, vjust=1, hjust=1))
 ```
 
+
+### Day 2 Read Coverage
+
+```{r}
+widths_per_gene <- readRDS("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_lengths.RDS")
+head(widths_per_gene)
+```
+
+```{r}
+pf_tx_size <- widths_per_gene[filter(species_genes, genome=="PF3D7") %>% 
+                                pull(gene_id)]
+
+length(pf_tx_size) #5720
+pf_tx_size %>% sum() #17,380,818
+
+# 75-bp paired-end reads
+# 23-Mb haploid genome
+```
+
+```{r}
+dge_lib.sizes <-  pf_combat_dge$samples %>% 
+  rownames_to_column("sample_id")
+
+day2 <- dge_lib.sizes %>% 
+  # filter(sample_id %in% pf_samples$sample_id_cat) %>% 
+  filter(time_point == "Day2", sample_id != 'L1PfM1_S13') %>% 
+  mutate(read_length = gsub("pb","", read_length) %>% as.numeric(.),
+         pf_tx_size =  sum(pf_tx_size)) %>% 
+  mutate(infection_status = ifelse(is.na(infection_status),
+                                   "GFP-Negative",  "GFP-Positive"),
+         total_bp_sequenced = lib.size * read_length, 
+         tx_coverage = round(total_bp_sequenced / pf_tx_size, digits = 3), 
+         tx_coverage_label = format(tx_coverage, digits = 3),
+         analysis_group_id = gsub("_Pf.", "", analysis_group_id)) %>% 
+    select(sample_id:norm.factors,
+           read_length,
+           pf_tx_size,
+           total_bp_sequenced,
+           tx_coverage,
+           everything())
+  
+
+
+# day2
+
+# day2_counts <- pf_combat_dge$counts[,day2$sample_id]
+# subset_day2_counts <- lapply(colnames(day2_counts), function(col){
+#   df <-  data.frame(gene_name = rownames(day2_counts), 
+#                     counts =  day2_counts[,col], 
+#                     sample = col) %>% 
+#     filter(counts > 0)
+# })
+# 
+# subset_day2_counts
+
+ggplot(day2, aes(y = infection_status, x = analysis_group_id)) +
+  geom_tile(aes(fill = tx_coverage), color = "white") +
+  geom_text(aes(label = tx_coverage_label)) +
+  scale_fill_gradient(high = "red", low = "dodgerblue")  +
+  labs(title = "Pf Transcriptome Coverage: Day 2 Samples") +
+  theme_classic()
+
+```
 
 ## PCA 
 

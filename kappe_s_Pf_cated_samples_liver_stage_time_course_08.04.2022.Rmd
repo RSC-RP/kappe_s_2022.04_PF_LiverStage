@@ -1415,6 +1415,17 @@ ggplot(data=expn_d456,
 # dev.off()
 ```
 
+```{r}
+cc <- viridis::viridis(4, begin=0.2, end=0.9) %>% 
+  set_names(sample_labels[-2])
+
+cc2 <- ggpubr::get_palette("npg", k = 4) %>% 
+  set_names(sample_labels[-2])
+
+# barplot(rep(1,4), col = cc, names.arg = names(cc))
+barplot(rep(1,4), col = cc2, names.arg = names(cc2))
+```
+
 ```{r fig.height=20, fig.width=12}
 # idx <- which(!duplicated(ordered_genes, fromLast=TRUE))
 # quickPheatmap(expn = sigs_all_d456$sig.genes$sig.profiles[names(ordered_genes),], 
@@ -2498,10 +2509,10 @@ EnrichmentBrowser
 - Could try kegg metabolic paths?
 
 ```{r}
+suppressPackageStartupMessages(library(BioNet))
 # library(CBNplot) 
-library(RTN)
-library(BioNet)
-library(EnrichmentBrowser)
+# library(RTN)
+# library(EnrichmentBrowser)
 # data(interactome) #Formal class 'graphNEL' [package "graph"] with 6 slots
 # data(dataLym)
 # BiocManager::install("EnrichmentBrowser", update = FALSE)
