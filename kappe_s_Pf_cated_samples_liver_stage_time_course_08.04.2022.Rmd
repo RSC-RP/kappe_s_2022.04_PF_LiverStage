@@ -24,6 +24,7 @@ library(tibble)
 library(magrittr)
 library(dplyr)
 library(stringr)
+library(glue)
 
 library(ggplot2)
 library(gridExtra)
@@ -49,6 +50,22 @@ suppressPackageStartupMessages(library(mclust))
 
 
 # Define Functions 
+
+```{r}
+colors_vector <- c(RColorBrewer::brewer.pal(9, "Set1"), 
+            "blue1", "darkslategray3", "burlywood3", "#984EA3",
+            "seagreen1", "yellow2", "orchid", "darkblue", 
+            "lightsalmon2","slateblue1","lightskyblue4",
+            "azure2", "chartreuse1",  "lemonchiffon2",
+            "deeppink", "darkslategray1", "green4", "navajowhite", 
+            "brown4", "darkgoldenrod2", "deepskyblue1", "lightpink") %>% 
+  # c(., ggpubr::get_palette("jco", 5)) %>% 
+  c("mediumpurple4","magenta", "peru") %>% 
+  c(ggsci::pal_igv()(20))
+
+# length(colors_vector)
+```
+
 
 ```{r}
 #from https://github.com/mikelove/DESeq2/blob/master/R/plots.R
@@ -823,7 +840,7 @@ clusterProfiler_bubble_plots <- function(df,pval_column="p.adjust",
       scale_y_discrete(expand = c(0.1,0)) +
       scale_x_continuous(expand = c(0.15,0)) +
       guides(fill="none",
-             size=guide_legend(title = "Number of Genes",
+             size=guide_legend(title = "Number of Genes in GO Term",
                                size = 1)) +
       theme(legend.position = "left",
             legend.key = element_rect(colour = NA, fill = NA),
@@ -868,6 +885,32 @@ replace_long_strings <- function(string){
 }
 ```
 
+```{r}
+# from BioNet R package - just modified the x,y axis ranges
+plotLLSurface <- function (x, opt = NULL, main = "Log-Likelihood Surface", color.palette = heat.colors,  nlevels = 32) {
+    if (is.null(opt)) 
+        opt <- list(a = -1, l = -1)
+    f <- function(l, a) {
+        fbumLL(c(l, a), x)
+    }
+    v <- seq(0.001, 0.99, 0.05)
+    z <- outer(v, v, Vectorize(f))
+    Lines <- list(bquote(lambda == .(round(opt$l, 4))), bquote(a == 
+        .(round(opt$a, 4))))
+    filled.contour(v, v, z, nlevels = nlevels, color.palette = color.palette, 
+        main = main, xlab = expression(lambda), ylab = "a", plot.axes = {
+            axis(1, seq(0, 1, 0.01))
+            axis(2, seq(0, 1, 0.01))
+            abline(v = opt$l, lty = 2, col = "darkgray")
+            abline(h = opt$a, lty = 2, col = "darkgray")
+            hght <- strheight("Here")
+            points(opt$l, opt$a, cex = 1.5)
+            # text(opt$l, opt$a - (hght * 1.5 * seq(length(Lines))), 
+            #     do.call(expression, Lines), adj = c(-0.2, -2.3), 
+            #     cex = c(0.8, 0.8))
+        })
+}
+```
 
 # Reference Data
 
@@ -893,6 +936,7 @@ head(orthoMCL)
 
 ```{r}
 update_ids <- read.csv("references/TF_families/TF_famlies_Insilico_GeneByLocusTag_Summary.csv")
+
 pf_tf_list <- read.csv("references/TF_families/TF_families_supplemental_table.csv") %>% 
   left_join(., update_ids, by=c("gene.ID"="Input.ID")) %>% 
   janitor::clean_names() %>% 
@@ -954,24 +998,32 @@ table(pf_samples$analysis_group)
 ```{r}
 cb_se <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_SummarizedExperiment.RDS")
 
-# cb_se
+cb_se
 ```
 
 ```{r}
 cb_eset <- readRDS("expression_data/kappe_s_PfHsMmu_cated_Pf_ParasitesPaper_samples_Pf3D7v58_combat-seq_expressionSet.RDS")
 
-# cb_eset
+# dim(cb_eset)
+```
+
+```{r}
+as.data.frame(colSums(assay(cb_se, "raw_counts"))) %>% 
+  head()
 ```
 
 ```{r}
 # design for time-series analysis with MaSigPro
-design_input <- colData(cb_se) %>% 
+design_input <- colData(cb_se) %>%
   as_tibble() %>%
+  droplevels() %>% 
   dplyr::select(sample_id_cat, 
                 analysis_group_id,
                 infection_status,
                 analysis_factor_group,
                 Time=time_point) %>% 
+  # remove Day2_Heps_S3_Pf (L3Pf2_S2xL3Pf2Mix_S3) due to very low read coverage
+  filter(!grepl("Day2_Heps_S3_Pf", analysis_group_id)) %>% 
   group_by(Time) %>% 
   mutate(masigpro_id=paste("Pf",  Time, 
                            paste0("Rep", 1:n()), sep="_")) %>% 
@@ -988,7 +1040,7 @@ design_input <- colData(cb_se) %>%
   set_rownames(.$masigpro_id)
   
 head(design_input)
-
+# design_input$infection_status
 
 expression <- log2(assay(cb_se,"cpm")+1)[,design_input$sample_id_cat]
 colnames(expression) <- rownames(design_input)
@@ -1005,24 +1057,24 @@ expression changes and significant differences between experimental groups.
 The data.abiotic object is a matrix with normalized gene expression data.
 
 ## All Days 
-
+                      
 ```{r eval=FALSE}
 pf_design <- make.design.matrix(dplyr::select(design_input,Time:Group),
-                                degree = 1)
+                                degree = 2)
 
 # Could use edgeR to define theta, rather than using the default value
-fit <- readRDS("results/time_course/masigpro/degree1/masigpro_fit_p.vector_D2456.RDS")
-tstep <- readRDS("results/time_course/masigpro/degree1/masigpro_tstep_D2456.RDS")
+# fit <- readRDS("results/time_course/masigpro/degree1/masigpro_fit_p.vector_D2456.RDS")
+# tstep <- readRDS("results/time_course/masigpro/degree1/masigpro_tstep_D2456.RDS")
 
-# fit <- p.vector(expression, pf_design,
-#                 counts=TRUE,
-#                 Q = 0.05,
-#                 MT.adjust = "BH",
-#                 min.obs = 5)
+fit <- p.vector(expression, pf_design,
+                counts=TRUE,
+                Q = 0.05,
+                MT.adjust = "BH",
+                min.obs = 5)
 
 
-# tstep <- T.fit(fit,
-#                step.method = "backward")
+tstep <- T.fit(fit,
+               step.method = "backward")
 
 # saveRDS(tstep,"results/time_course/masigpro/masigpro_tstep_D2456.RDS")
 #  saveRDS(fit,"results/time_course/masigpro/masigpro_fit_p.vector_D2456.RDS")
@@ -1048,30 +1100,28 @@ You can use option ”each” to analyze the type of responses present in the si
 the linear response that might be indicating transitory or saturation responses
 
 ```{r eval=FALSE}
-## This will obtain all sigificant genes regardless the Rsquared value.
+## This will obtain all sigificant genes
 sigs_all <- get.siggenes(tstep,
                      rsq = 0.6, 
                      vars = "all",
                      trat.repl.spots="none")
 
-sigs_all_df <- bind_cols(c(sigs_all$sig.genes[2:4], sigs_all$sig.genes[1]))
-
-dim(sigs_all_df) #293 genes
-length(sigs_all$summary)
-head(sigs_all$summary)
+# length(sigs_all$summary)
+# head(sigs_all$summary)
 # quantile(sigs_all_df$`p-value`, na.rm=TRUE)
-
-## This will obtain sigificant genes per experimental group
-sigs_each <- get.siggenes(tstep,
-                     rsq = 0.6, 
-                     vars = "each",
-                     trat.repl.spots="none")
-
-
-dim(sigs_each$summary) #293
 ```
 
 Data clustering can be done on the basis of either the original expression values, the regression coefficients, or the t.scores.
+
+```{r eval=FALSE}
+# identical values b/c only 1 group
+bind_cols(sigs_all$sig.genes$coefficients,
+          sigs_all$sig.genes$group.coeffs) %>% 
+  rownames_to_column("gene_id") %>% 
+  filter(beta0 != Group_beta0 | 
+           betaTime != Group_beta1)
+```
+
 
 ```{r fig.height=10, fig.width=10, eval=FALSE}
 gene_clusters <- see.genes(data = sigs_all$sig.genes,
@@ -1085,27 +1135,47 @@ gene_clusters <- see.genes(data = sigs_all$sig.genes,
 # gene_clusters$cut
 ```
 
+```{r}
+sigs_all_df <- bind_cols(c(sigs_all$sig.genes[c("coefficients","sig.pvalues")], 
+                           sigs_all$sig.genes["sig.profiles"])) %>% 
+  rownames_to_column("gene_id") %>% 
+  add_column(cluster = gene_clusters$cut, .before = 2) %>% 
+  arrange(cluster)
+
+head(sigs_all_df)
+dim(sigs_all_df) #708 genes
+
+# write.csv(sigs_all_df, "results/time_course/masigpro/maSigPro_significant_genes_degree2_time_course_day2-day6_excludeDay2rep3_results.csv", row.names = FALSE)
+```
+
 ### Expression plots 
+
+```{r}
+identical(rownames(sigs_all$sig.genes$sig.profiles), names(gene_clusters$cut)) # TRUE
+```
 
 ```{r eval=FALSE}
 expn <- sigs_all$sig.genes$sig.profiles  %>% 
   rownames_to_column("gene_id") %>% 
-  add_column(cluster=gene_clusters$cut, .before=2) %>% 
-  pivot_longer(cols=matches("Pf"), 
+  add_column(cluster=gene_clusters$cut,.before=2) %>% 
+  pivot_longer(cols=matches("Pf"),
                names_to="masigpro_id",
                values_to="log2_CPM") %>%
-  left_join(., design_input, by="masigpro_id") %>% 
-  group_by(cluster) %>% 
-  mutate(label=paste0("cluster", cluster, "\n (", length(unique(gene_id)), " genes)")) %>% 
-  ungroup() %>% 
-  group_by(cluster, analysis_factor_group) %>% 
-  mutate(median_val=median(log2_CPM)) %>% 
-  ungroup() %>% 
-  group_by(cluster, analysis_factor_group, masigpro_id) %>% 
-  mutate(median_val_per_sample=median(log2_CPM)) %>% 
+  left_join(., design_input, by="masigpro_id") %>%
+  
+  group_by(cluster) %>%
+  mutate(label=paste0("cluster", cluster, "\n (", length(unique(gene_id)), " genes)")) %>%
+  ungroup() %>%
+  
+  group_by(cluster, analysis_factor_group) %>%
+  mutate(median_val=median(log2_CPM)) %>%
+  ungroup() %>%
+  
+  group_by(cluster, analysis_factor_group, masigpro_id) %>%
+  mutate(median_val_per_sample=median(log2_CPM)) %>%
   ungroup()
 
-head(expn)
+# expn
 ```
 
 ```{r fig.height=10, fig.width=14, eval=FALSE}
@@ -1167,23 +1237,30 @@ ggplot(data=expn,
 # dev.off()
 ```
 
-```{r fig.height=20, fig.width=12 eval=FALSE}
-ordered_genes <- gene_clusters$cut[order(gene_clusters$cut)]
-idx <- which(!duplicated(ordered_genes, fromLast=TRUE))
-quickPheatmap(expn = sigs_all$sig.genes$sig.profiles[names(ordered_genes),], 
-              sample_data = design_input[,c("analysis_factor_group","infection_status")],
-              gene_index=idx)
-```
+
+```{r fig.height=20, fig.width=12, eval=FALSE}
+gene_clust_df1 <- sigs_all_df %>%
+  mutate(gene_cluster_factor = as.factor(cluster)) %>% 
+  select(gene_id,
+         cluster=gene_cluster_factor) %>% 
+  column_to_rownames("gene_id")
+
+n <- length(unique(gene_clust_df1$cluster))
+print(n)
+row_ha1 <- ComplexHeatmap::rowAnnotation(df = gene_clust_df1, 
+                        col = list(cluster=ggpubr::get_palette("jco", n) %>% 
+                                     set_names(levels(gene_clust_df1$cluster))))
 
 
-```{r eval=FALSE, fig.height=10, fig.width=12}
-hmap_time_course <- create_pf_heatmaps(TMMCPM = sigs_all$sig.genes$sig.profiles[names(ordered_genes),],
-                   sample_annots = design_input,
-                   gene_annots = fData(cb_eset),
-                   genelist = names(ordered_genes),
-                   split=ordered_genes)
+hmap_time_course <- create_pf_heatmaps(TMMCPM = sigs_all$sig.genes$sig.profiles[rownames(gene_clust_df1),],
+                                       sample_annots = design_input,
+                                       gene_annots = rowData(cb_se),
+                                       genelist = rownames(gene_clust_df1),
+                                       split = gene_clust_df1$cluster)
 
-hmap_time_course$heatmap
+# pdf("figures/combat_seq/kappe_s_maSigPro_time_course_day2-day6_exclude_Day2_rep3_clusters_expression_heatmap.pdf", height = 10, width = 14)
+hmap_time_course$heatmap + row_ha1
+# dev.off()
 ```
 
 ## Day 456
@@ -1212,9 +1289,6 @@ tstep_d456  <- T.fit(fit_d456, step.method = "backward")
 # saveRDS(tstep_d456,"results/time_course/masigpro/masigpro_tstep_degree2_D456.RDS")
 
 ##"Influence: 85 genes with influential data at slot influ.info. Model validation for these genes is recommended"
-# fit_d456 <- readRDS("results/time_course/masigpro/masigpro_fit_p.vector_degree2_D456.RDS")
-# fit_d456$p.vector %>% length()
-# fit_d456$p.vector %>% head()
 ```
 
 ```{r}
@@ -1227,11 +1301,12 @@ sigs_all_d456 <- get.siggenes(tstep_d456,
                      trat.repl.spots="none")
 
 
-sigs_all_d456$sig.genes$sig.pvalues %>% head()
+# sigs_all_d456$sig.genes$sig.pvalues %>% head()
 # sigs_all_d456$sig.genes$Time$coefficients
 # sigs_all_d456$sig.genes$Time2$coefficients
 # sigs_all_d456$sig.genes$independ$coefficients
 ```
+
 
 You can use option ”each” to analyze the type
 of responses present in the significant genes: significant genes at the ”intercept” term will have
@@ -1262,12 +1337,21 @@ Profile 4 Increasing over LS development (Cluster 5 & Cluster 9),
 Profile 5 upregulated in mature LS forms (Cluster 7).
 
 ```{r}
+names(sigs_all_d456)
+names(sigs_all_d456$sig.genes)
+# sigs_all_d456$sig.genes$group.coeffs
+# sigs_all_d456$sig.genes$coefficients
+# sigs_all_d456$sig.genes$sig.pvalues
+```
+
+```{r}
 # identical(names(gene_clusters_d456$cut),sigs_all_d456$summary)
-sigs_all_df_d456 <- bind_cols(c(sigs_all_d456$sig.genes[c(2,4)], 
-                                sigs_all_d456$sig.genes[1])) %>% 
+sigs_all_df_d456 <- bind_cols(c(sigs_all_d456$sig.genes[c("group.coeffs","sig.pvalues")], 
+                                sigs_all_d456$sig.genes["sig.profiles"])) %>% 
   mutate(gene_cluster=gene_clusters_d456$cut) %>% 
   rownames_to_column("gene_id") %>% 
-  mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>%
+  mutate(gene_cluster_factor=factor(gene_cluster, 
+                                    levels=c(1,2,3,8,4,6,5,9,7))) %>%
   arrange(gene_cluster_factor) %>% 
   
   group_by(gene_cluster_factor) %>% 
@@ -1277,7 +1361,7 @@ sigs_all_df_d456 <- bind_cols(c(sigs_all_d456$sig.genes[c(2,4)],
   dplyr::select(gene_id,matches("gene_cluster"), everything())
 
 
-dim(sigs_all_df_d456) #1510   26
+# dim(sigs_all_df_d456) #1510   26
 head(sigs_all_df_d456)
 
 
@@ -1360,8 +1444,6 @@ ggplot(data=expn_d456,
 
 ```{r fig.height=10, fig.width=5}
 # png("figures/combat_seq/masigpro/kappe_s_maSigPro_time_course_expression_boxplot_d456.png", height = 14, width = 10, units = "in", res = 150)
-
-
 sample_labels <- c("sporozorite"="sporozoites", 
                    "Day2_Heps_Pf"="Day2_Pf_LS",
                    "Day4_Heps_Pf"="Day4_Pf_LS",
@@ -1710,6 +1792,8 @@ suppressPackageStartupMessages(library(clusterProfiler))
 threshold <- 1.2
 ```
 
+### Day 2 
+
 ```{r}
 day2_go_clean <- read.csv("results/GO_enrichment/day2/day2_vs_spz_ClusterProfiler_AllOntology.csv") %>% 
   mutate(Direction=ifelse(NES>0, "Enriched_Day2","Enriched_SPZ")) %>%
@@ -1768,6 +1852,16 @@ day2_go_clean <- purrr::map_dfr(D2_GSEA_objs, function(x) x@result) %>%
 ```
 
 ```{r}
+chk <- day2_go_clean %>% 
+  filter(Direction == "Enriched_Day2") %>%
+  filter(p.adjust < 0.05) %>% 
+  mutate(neg_log10_p=-log10(pvalue))
+
+quantile(chk$p.adjust)
+table(chk$neg_log10_p > threshold)
+```
+
+```{r}
 lab1 <- day2_go_clean %>% 
   filter(ID=="GO:0006412") %>% 
   mutate(label=paste(ID,go_term_name)) %>% 
@@ -1792,16 +1886,6 @@ bc2
 ```
 
 ```{r}
-chk <- day2_go_clean %>% 
-  filter(Direction == "Enriched_Day2") %>%
-  filter(p.adjust < 0.05) %>% 
-  mutate(neg_log10_p=-log10(pvalue))
-
-quantile(chk$p.adjust)
-table(chk$neg_log10_p > threshold)
-```
-
-```{r}
 layout <- "
 BCCC
 DDD#
@@ -1810,16 +1894,20 @@ DDD#
 # Note - the Filter=TRUE filters the supplied pval_column < 0.05
 d2_up <- day2_go_clean %>% 
   filter(Direction == "Enriched_Day2") %>% 
-  clusterProfiler_bubble_plots(.,label = "labels",
+  clusterProfiler_bubble_plots(.,
+                               label = "labels",
                                pval_column="p.adjust",
-                               label="go_term_name",Filter=TRUE)  +
+                               # label="go_term_name",
+                               Filter=TRUE)  +
   labs(title = "GO Terms Enriched in Day 2")
 
 d2_down <- day2_go_clean %>%
   filter(Direction == "Enriched_SPZ") %>%
-  clusterProfiler_bubble_plots(.,label = "labels",
+  clusterProfiler_bubble_plots(.,
+                               label = "labels",
                                pval_column="p.adjust",
-                               label="go_term_name",Filter=TRUE) +
+                               # label="go_term_name",
+                               Filter=TRUE) +
   labs(title = "GO Terms Enriched in Sporozoite")
 
 # svglite("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_bubblePlot_barcode_Day2.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 7, width = 11.5)
@@ -1838,9 +1926,9 @@ purrr::map(unique(day2_go_clean$ontology), function(ont, df){
   df <- day2_go_clean %>% 
     filter(ontology==ont)
   
-  pdf(paste0("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_",ont,"_bubblePlot.pdf"), height = 5, width = 8)
+  # pdf(paste0("figures/combat_seq/bubble_plots/day2_vs_spz_ClusterProfiler_",ont,"_bubblePlot.pdf"), height = 5, width = 8)
   print(clusterProfiler_bubble_plots(df))
-  dev.off()
+  # dev.off()
 })
 ```
 
@@ -1969,11 +2057,6 @@ top_paths <- cluster_go_dfs %>%
          setSize_clean=ifelse(setSize > 20, 20, setSize))
 
 dim(top_paths) #  65 18
-# head(top_paths)
-# table(duplicated(top_paths$ID))
-# table(top_paths$text_color)
-# table(top_paths$cluster_number)
-# quantile(top_paths$setSize, probs = seq(0,1, length.out=11))
 quantile(top_paths$p.adjust)
 quantile(top_paths$pvalue)
 table(top_paths$neg_log10_p > threshold)
@@ -2085,7 +2168,6 @@ cluster_go_combined_dfs <- bind_rows(cluster_go_combined) %>%
 # write.csv(cluster_go_combined_dfs, results/GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_allOntology.csv", row.names = FALSE)
 ```
 
-
 ```{r}
 p <- purrr::map(unique(cluster_go_combined_dfs$cluster_number), function(clust){
   df <- cluster_go_combined_dfs %>% 
@@ -2103,28 +2185,35 @@ names(p) <- unique(cluster_go_combined_dfs$cluster_number)
 ```
 
 ```{r}
+# quick reminder on -log10(p) threshold
+print(threshold)
+```
+
+```{r}
 top_paths_profiles <- cluster_go_combined_dfs %>% 
    mutate(neg_log10_q=-log10(qvalue),
           neg_log10_p=-log10(pvalue)) %>% 
   
   group_by(cluster_number) %>% 
-  dplyr::filter( qvalue < 0.2 ) %>% 
-  dplyr::arrange(desc(neg_log10_p), .by_group = TRUE) %>% 
-  dplyr::slice(1:10) %>% 
-  mutate(x_pos = max(neg_log10_p)+0.5) %>% 
-  ungroup() %>% 
+  dplyr::filter( qvalue < 0.2 ) %>%
+  dplyr::filter(neg_log10_p > threshold) %>%
   
-  dplyr::filter(ontology != "N/A") %>% 
+  dplyr::arrange(desc(neg_log10_p), .by_group = TRUE) %>%
+  dplyr::slice(1:10) %>%
+  mutate(x_pos = max(neg_log10_p)+0.5) %>%
+  ungroup() %>%
+
+  dplyr::filter(ontology != "N/A") %>%
   mutate(GO_term=ID,
-         ID=paste(cluster_number, ID, sep="_")) %>% 
-  mutate(ID=factor(ID, levels = rev(unique(ID)) )) %>% 
-  arrange(desc(ID)) %>% 
+         ID=paste(cluster_number, ID, sep="_")) %>%
+  mutate(ID=factor(ID, levels = rev(unique(ID)) )) %>%
+  arrange(desc(ID)) %>%
   mutate(text_color=case_when(
            ontology=="Cellular_Component" ~ "green4",
            ontology=="Biological_Process" ~ "tomato2",
            TRUE ~ "dodgerblue"
          ),
-         setSize_clean=ifelse(setSize > 25, 25, setSize))  %>% 
+         setSize_clean=ifelse(setSize > 25, 25, setSize))  %>%
   select(ID:ontology, text_color, labels,
          x_pos,
          neg_log10_p,
@@ -2134,7 +2223,9 @@ top_paths_profiles <- cluster_go_combined_dfs %>%
 # top_paths_profiles
 
 # levels(top_paths_profiles$ID) %>% length()
-range(top_paths_profiles$neg_log10_p)
+table(top_paths_profiles$neg_log10_p > threshold) #OK
+# write.csv(top_paths_profiles, "results/GO_enrichment/timecourse/time_course_clusters_combinedProfiles_clusterProfiler_top10_sig_results.csv",
+#           row.names = FALSE)
 ```
 
 ```{r fig.width=12, fig.height=6}
@@ -2166,7 +2257,7 @@ bubble_plot_profile <- ggplot(top_paths_profiles, aes(x=neg_log10_p, y=ID)) +
       # scale_fill_viridis_d(option = "turbo", begin=0.2, end=0.9) +
       scale_fill_manual(values=rainbow(n = 38, v = 0.7, s=0.6)) +
       guides(fill="none",
-             size=guide_legend(title = "Number of Genes", size = 1)) +
+             size=guide_legend(title = "Number of Genes\nin GO Term", size = 1)) +
       theme_classic() +
       theme(panel.grid.major.y =  element_line(color="black",size = 0.1),
             axis.text = element_text(size=14),
@@ -2496,72 +2587,516 @@ https://bioconductor.org/packages/release/bioc/vignettes/qpgraph/inst/doc/qpTxRe
 - Need Tfs and target genes! 
 
 https://www.bioconductor.org/packages/release/bioc/html/CBNplot.html
-- missing dependencies on POSIT 
+- Only run on POSIT
 - uses GSEA results
+- no support for undirected graphs?? 
 
 https://bioconductor.org/packages/release/bioc/vignettes/BioNet/inst/doc/Tutorial.pdf
 - Need PPI 
 - https://www.nature.com/articles/nature04104 
 - https://www.sciencedirect.com/science/article/pii/S221112471930909X
-
+  - P. falciparum schizonts were freed from erythrocytes by incubation with 0.1% saponin in PBS for 10 minutes and then washed with PBS to remove saponin.
+  - Mouse-derived P. berghei infected erythrocytes were put into culture for 22-24 hours to generate schizont
+  - P. knowlesi schizonts were [...] freed from erythrocyte
+  
 EnrichmentBrowser
 - Need a network 
 - Could try kegg metabolic paths?
 
 ```{r}
 suppressPackageStartupMessages(library(BioNet))
+suppressPackageStartupMessages(library(igraph))
 # library(CBNplot) 
 # library(RTN)
 # library(EnrichmentBrowser)
-# data(interactome) #Formal class 'graphNEL' [package "graph"] with 6 slots
-# data(dataLym)
+
 # BiocManager::install("EnrichmentBrowser", update = FALSE)
-# BiocManager::install("DLBCL", update = FALSE)
 # hsa.grn <- compileGRN(org="ko", db="kegg")
 # head(hsa.grn)
 ```
 
 ```{r}
-GO_annots_TF <- GO_annots %>% 
-  filter(grepl("transcription factor", go_term_name))
+# read in the time-course results
+if(!exists("gene_clusts_combined_dfs")){
+  time_course <- read.csv("results/time_course/masigpro/masigpro_significant_genes_degree2_d456_results.csv") %>% 
+    select(-X) %>% 
+    mutate(gene_cluster_factor=factor(gene_cluster, levels=c(1,2,3,8,4,6,5,9,7))) %>% 
+    mutate(combined_gene_clusters=case_when(
+      grepl("1$|2$",gene_cluster) ~ "Profile1",
+      grepl("3$|8$", gene_cluster) ~ "Profile2",
+      grepl("4$|6$", gene_cluster) ~ "Profile3",
+      grepl("5$|9$", gene_cluster) ~ "Profile4",
+      grepl("7", gene_cluster) ~ "Profile5"
+    )) %>% 
+    dplyr::select(gene_id, matches("gene_cluster"), everything()) %>% 
+    arrange(gene_cluster)
+}
 
-# length(unique(GO_annots_TF$gene_id))
-# head(GO_annots_TF)
+# Need the fit object from MaSigPro for p-values for genes not selected in time-course analysis
+fit_d456 <- readRDS("results/time_course/masigpro/masigpro_fit_p.vector_degree2_D456.RDS")
+
+# Need gene_names info
+pf_genes <- as.data.frame(rowData(cb_se)) %>% 
+  mutate(gene_name = gsub("Name=","", gene_name))
+
+# collect DE analysis results into a single file 
+de_res <- dir("results/DEGs", pattern = "Day[456].+unfiltered_DEGs.csv", full.names = TRUE)
+DEGs <- purrr::map(de_res, function(x){
+  grp <- gsub(".+(Day[456].+)_vs.+","\\1", basename(x))
+  
+  df <- read.csv(x, comment.char = "#") %>% 
+    janitor::clean_names() %>% 
+    mutate(group = grp) %>% 
+    rename_at(vars(-gene_id), ~paste(., grp, sep = "_")) %>% 
+    select(matches("group"), everything())
+}) %>% 
+  purrr::reduce(.x = .,
+                .f = function(x,y){
+    full_join(x, y, by = "gene_id") 
+  }) %>% 
+  left_join(., pf_genes, by = "gene_id") %>% 
+  select(gene_id,gene_name,
+         matches("group"),
+         matches("p_value_"), everything())
+
+# head(DEGs)
+# dim(DEGs) #5151   22
 ```
+
+```{r}
+PPI_GO_terms <- openxlsx::read.xlsx("resources/PPI/1-s2.0-S221112471930909X-mmc8.xlsx") %>% 
+  janitor::clean_names() %>% 
+    group_by(cluster_number) %>% 
+  mutate(go_processes = paste(go_process, collapse = "; ")) %>% 
+  ungroup() %>% 
+  select(cluster_number,go_processes) %>% 
+  distinct() %>% 
+  arrange(cluster_number)
+
+# PPI_GO_terms
+
+PPI_clusters <- openxlsx::read.xlsx("resources/PPI/1-s2.0-S221112471930909X-mmc7.xlsx") %>% 
+  janitor::clean_names() %>% 
+  mutate_at(vars(corum_complex), ~ifelse(is.na(.), "", .)) %>% 
+  group_by(cluster_number) %>% 
+  mutate(corum_complex_clean = str_split_fixed(unique(corum_complex), pattern = "[;]", n = 3)[,1:2] %>% 
+           paste(., collapse = "; ")) %>% 
+  ungroup() %>% 
+  mutate_at(vars(corum_complex_clean), ~gsub("^;|;\\s{1,}$", "", .) %>% 
+              gsub(", cytoplasmic", "", .) %>% 
+              gsub("\\s?\\(.+\\)\\s?", "", .)) %>% 
+  select(cluster_number, gene_id, symbol, corum_complex_clean)  %>% 
+  left_join(., PPI_GO_terms, by = "cluster_number") %>% 
+  mutate_at(vars(go_processes,corum_complex_clean), ~ifelse(is.na(.), "", .)) 
+
+# head(PPI_clusters)
+# dim(PPI_clusters) #1785    3
+````
+
 
 ```{r}
 PPI <- openxlsx::read.xlsx("resources/PPI/1-s2.0-S221112471930909X-mmc6.xlsx") %>% 
-  mutate(TF = ifelse(source %in% GO_annots_TF$gene_id, "TF", "Other"))
+  janitor::clean_names() %>% 
+  
+  # skip protein nodes that have multiple gene_ids
+  # and retain those found in the expression data (filtered to remove lowly expressed genes)
+  filter(!grepl(",", source)) %>% 
+  filter(source %in% pf_genes$gene_id, 
+         target %in% pf_genes$gene_id) 
 
 head(PPI)
+# dim(PPI) #23544    36
 ```
 
 ```{r}
-PPI %>% 
-  select(source, TF, sourceDescription, STRING,REACTOME) %>% 
+gene_names_annot <- pf_genes %>% 
+                      pull(gene_name, name = gene_id)
+
+# head(gene_names_annot)
+
+protein_complex_annots <- PPI %>% 
+  select(source, target) %>% 
+  pivot_longer(cols = everything(), 
+               names_to =  "cols", 
+               values_to = "gene_id") %>% 
+  left_join(., PPI_clusters, by= c("gene_id")) %>% 
+  mutate(protein_complex_id = ifelse(is.na(cluster_number), "unassigned", cluster_number)) %>% 
+  select(-cluster_number, -cols) %>% 
   distinct() %>% 
-  filter(TF == "TF")
-```
+  
+  group_by(protein_complex_id) %>% 
+  mutate(number_proteins_in_complex = n()) %>% 
+  ungroup()  %>% 
+  mutate_at(vars(go_processes,corum_complex_clean), ~ifelse(is.na(.), "", .)) %>% 
+  select(gene_id, protein_complex_id, number_proteins_in_complex,
+         everything())
 
-```{r}
-GRN <- PPI %>% 
-  select(from = source, to = target)
 
-length(unique(GRN$from)) #1512
-# head(PPI)
-# quantile(PPI$RFscore)
-```
+# head(protein_complex_annots)
+# dim(protein_complex_annots) #2141    5
+``` 
 
 ### BioNet
 
+broken link https://software.cwi.nl/software/heinz
+https://academic.oup.com/bioinformatics/article/26/8/1129/207852
+
 ```{r}
+pf_ppi_graph <- ftM2graphNEL(ft = as.matrix(PPI[,c("source","target")]), 
+                             W = PPI[["r_fscore"]],
+                             edgemode="undirected")
+
+pf_ppi_graph
+# A graphNEL graph with undirected edges
+# Number of Nodes = 1642 
+# Number of Edges = 23544
+```
+
+```{r}
+ppi_modules <- function(time_course_res, cluster_name, input_network, msp_fit, DEGs = NULL, percentile=0.1){
+  
+  # combine time-course and DEGs p-values into a single vector
+  if(!is.null(DEGs)){
+      message("combining DE results with time-course results p-values")
+      # join time-course and DE results 
+      pvals <- time_course_res %>% 
+        filter(combined_gene_clusters == cluster_name) %>% 
+        select(gene_id, p.value) %>% 
+        left_join(.,select(DEGs, gene_id, matches("p_value_")),
+                  by = "gene_id") %>% 
+        column_to_rownames("gene_id") %>% 
+        as.matrix()
+      
+      # combine time-course p-values for all genes with all DE results (including non-significant hits)
+      all_pf_pvals <- msp_fit$p.vector %>% 
+        as.data.frame() %>% 
+        rownames_to_column("gene_id") %>% 
+        left_join(.,select(DEGs, gene_id, matches("p_value_")),
+                  by = "gene_id") %>% 
+        column_to_rownames("gene_id") %>% 
+        as.matrix()
+
+      # remove the time-course cluster genes from the "full" `all_pf_pvals` dataset
+      input_pf_vals <- all_pf_pvals[setdiff(rownames(all_pf_pvals), time_course_res$gene_id),]
+      
+      chk1 <- !any(rownames(input_pf_vals) %in% rownames(pvals)) # TRUE
+      chk2 <- !any(rownames(input_pf_vals) %in% time_course_res$gene_id) #TRUE
+      chk3 <- identical(colnames(input_pf_vals), colnames(pvals)) #TRUE
+      # testit::assert("", )
+      if(all(c(chk1,chk2,chk3))){
+         in_pvalues <- rbind(pvals, input_pf_vals)
+      }
+ 
+    } else {
+      message("Using time-course results p-values")
+      # gene ids of all time-course selected sig genes
+      all_sig_genes <- time_course_res %>% 
+        pull(gene_id)
+      
+      # pvalues of time-course cluster
+      pvalues <- time_course_res %>% 
+        filter(combined_gene_clusters == cluster_name) %>%  
+        pull(p.value, name = gene_id) 
+      
+      # need p-values for the non-sig genes too
+      pf_genes_pvals <- msp_fit$p.vector[,1] %>% 
+        set_names(., value = rownames(msp_fit$p.vector))
+    
+      # remove genes from other time-course clusters
+      not_in_profile <- pf_genes_pvals[setdiff(names(pf_genes_pvals), all_sig_genes)]
+      in_pvalues <- c(pvalues, not_in_profile)
+      # remove NA values if present and order 
+      in_pvalues <- in_pvalues[!is.na(in_pvalues)]
+      in_pvalues <- in_pvalues[order(in_pvalues)]
+    }
+  
+
+  # aggregate if its a matrix input
+  if(is.matrix(in_pvalues)){
+      in_pvalues <- aggrPvals(in_pvalues, plot=FALSE)
+      # remove NA values if present and order 
+      in_pvalues <- in_pvalues[!is.na(in_pvalues)]
+      in_pvalues <- in_pvalues[order(in_pvalues)]
+  }
+  # beta-uniform mixture model to a given p-value distribution
+  message("fitting p-values")
+  fb <- fitBumModel(x = in_pvalues, plot=FALSE, starts = 10)
+  
+  # subset the network graph
+  message("subset the network graph")
+  subnet <- subNetwork(nodeList = names(in_pvalues),
+                        network = input_network)
+  subnet <- rmSelfLoops(subnet)
+  subnet <- largestComp(subnet)
+  # A graphNEL graph with undirected edges
+  
+  # Add scores to the subnetworks
+   message(glue("Add scores to the subnetworks using the top {percentile} percentile threshold"))
+  scores <- scoreNodes(network = subnet,
+                       fb = fb, 
+                       fdr = quantile(fb$pvalues, probs = percentile))
+  
+  # identify the enriched subnetwork(s) 
+  message("identify the enriched subnetwork(s)")
+  module <- runFastHeinz(network = subnet, 
+                         scores = scores)
+  
+  res <- list("module" = module,
+              "scores" = scores,
+              "pvalues" = in_pvalues,
+              "model" = fb)
+}
+```
+
+This genes was part of the selected PPI subnet/module identified by BioNET in Profile3 
+PF3D7_1351600
+- it is not found in any other time-course clusters (good)
+- it IS found in the DEGs which is likely why it was selected 
+- SO should it be included in the graph??
+
+
+```{r}
+timecourse_profiles <- unique(time_course$combined_gene_clusters) %>% 
+  set_names(., value = .)
+
+enriched_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
+  print(profile)
+  ppi_modules(time_course_res = time_course, 
+                  cluster_name = profile,
+                  msp_fit = fit_d456,
+                  input_network = pf_ppi_graph, 
+                  DEGs = DEGs,
+                  percentile = 0.05)
+
+})
+```
+
+```{r fig.height=7, fig.width=7}
+# enriched_ppi_modules$Profile1$module
+# names(enriched_ppi_modules$Profile1)
+# lapply(enriched_ppi_modules, function(x) x[["module"]])
+
+# checkout model fit
+ lapply(names(enriched_ppi_modules), function(x){
+   input <- enriched_ppi_modules[[x]]
+  #  p <- enriched_ppi_modules[["pvalues"]]
+  #  mod <- enriched_ppi_modules[["model"]]
+  #  
+  plotLLSurface(x = enriched_ppi_modules[[x]]$pvalues, 
+              opt = enriched_ppi_modules[[x]]$model)
+ })
+# checkout model fit
+lapply(enriched_ppi_modules, function(x) plot(x[["model"]]))
+```   
+
+```{r fig.height=5, fig.width=5}
+ppi_network_figures(input_module = enriched_ppi_modules$Profile1$module, 
+                    protein_complex_annots = protein_complex_annots,
+                    gene_names_annot = gene_names_annot,
+                    DEGs = DEGs)
+```
+
+
+```{r}
+ppi_network_figures <- function(input_module, protein_complex_annots, gene_names_annot, DEGs){
+  
+    # node (gene_id) names 
+    sel_nodes <- nodes(input_module)
+    
+    # subset to genes in the module 
+    protein_complexes <- protein_complex_annots %>% 
+        filter(gene_id %in% sel_nodes) %>% 
+        
+        # count number of genes within protein complexes
+        # ppic == protein-protein interaction complex
+        group_by(protein_complex_id) %>%
+        mutate(number_genes_in_ppic = n()) %>% 
+        ungroup()  %>% 
+        mutate(percent_in_complex = round( number_genes_in_ppic / number_proteins_in_complex * 100, digits = 2)) %>%
+        
+        # remove duplicate gene_ids and select those with protein complex that has > 3 genes
+        group_by(gene_id) %>%
+        mutate(num_gene_annots = n(),
+               keep = case_when(
+                      num_gene_annots == 1 ~ TRUE,
+                      num_gene_annots > 1 & all(number_genes_in_ppic == 1) ~ !duplicated(gene_id),
+                      num_gene_annots > 1 & any(grepl("^[0-9]", protein_complex_id)) ~ number_genes_in_ppic == max(number_genes_in_ppic)
+        )) %>% 
+        ungroup() %>% 
+        arrange(gene_id) %>% 
+        filter(keep) %>% 
+    
+        # check for any remaining duplicate annotations
+        mutate(dups = duplicated(gene_id) | duplicated(gene_id, fromLast = TRUE)) %>% 
+        
+        # retain annots for graph visualization
+        mutate(protein_complex_id = case_when(
+                          protein_complex_id == "unassigned" ~ "other", 
+                          number_genes_in_ppic == 1 ~ "other", 
+                          TRUE ~ protein_complex_id) %>% 
+                      as.factor(.)
+        ) %>% 
+        
+        # generate color codes for the graph figure
+        group_by(protein_complex_id) %>%
+        mutate(node_color = case_when(
+           protein_complex_id == "other" ~ "grey80",
+           TRUE ~ colors_vector[dplyr::cur_group_id()]
+        )) %>%
+        ungroup() %>%
+        
+        # order the data to be identical to nodes in graph
+        mutate(gene_id = factor(gene_id, levels = sel_nodes)) %>% 
+        arrange(gene_id) %>% 
+        
+        select(dups, 
+               number_genes_in_ppic,
+               percent_in_complex,
+               keep,
+               num_gene_annots,
+               everything()) 
+
+    chk1 <- all(!protein_complexes$dups) # TRUE
+    chk2 <- nrow(protein_complexes) == length(sel_nodes) # TRUE
+    chk3 <- all(sel_nodes %in% protein_complexes$gene_id) # TRUE
+    if(all(c(chk1, chk2, chk3))){
+    
+        # combine the DEGs results and protein complex annotations
+        fcs <- DEGs %>% 
+          filter(gene_id %in% sel_nodes) %>% 
+          pivot_longer(cols = matches("log_fc_"), 
+                       names_to = "time_point",
+                       values_to = "log_fc") %>% 
+          select(gene_id, gene_name, time_point, log_fc) %>% 
+          left_join(., protein_complexes, by = "gene_id") %>% 
+          mutate(time_point = gsub(".+(Day[456])_.+","\\1", time_point)) %>%
+          group_by(gene_name) %>%
+          mutate(mean_fc = mean(log_fc)) %>%
+          ungroup() %>%
+          # arrange heatmap/tileplot by protein cluster ID and decreasing fold-change 
+          arrange(protein_complex_id, desc(mean_fc)) %>% 
+          mutate(gene_name = factor(gene_name, levels = rev(unique(gene_name))))
+        
+        # color codes vector for the protein cluster numbers 
+        pcid <- select(protein_complexes, 
+                      node_color, 
+                      protein_complex_id) %>%
+          distinct() %>% 
+          mutate(x = "cluster")
+        
+        ###### Generate heatmap of Fold-changes for genes in the module
+        fc_plot <- ggplot(fcs, aes(x = time_point, y = gene_name, fill = log_fc)) +
+          labs(y = "", x = "", title = "Fold-Changes per LS Timepoint") +
+          geom_tile() + 
+          coord_fixed() +
+          scale_x_discrete(expand = c(0,0)) +
+          scale_fill_viridis_c(option = "A") +
+          theme_classic() +
+          theme(legend.position = "top", 
+                axis.text = element_text(color = "black", size = 8),
+                axis.text.x = element_text(angle = 35, vjust = 1, hjust = 1),
+                plot.title = element_text(size = 10))
+        
+        protein_complex_anno <- ggplot(fcs, aes(x = "protein_complex", y = gene_name)) +
+          geom_text(aes(label = protein_complex_id, color = protein_complex_id),
+                    size = 4) +
+          scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id),
+                             guide = NULL) +
+          labs(title = "ID") +
+          theme_void() +
+          theme(plot.title = element_text(size = 10))
+        
+        anno_df <- fcs %>% 
+          select(gene_name, protein_complex_id, go_processes, corum_complex_clean) %>% 
+          mutate_at(vars(go_processes, corum_complex_clean), 
+                    ~ifelse(protein_complex_id == "other", "", .)) %>% 
+          mutate(anno = paste(go_processes, corum_complex_clean, sep = "; ")) %>% 
+          mutate(anno = gsub("^;|^NA;|NA$", "", anno)) %>% 
+          select(gene_name, protein_complex_id, anno)
+        
+        ppic_anno <- ggplot(anno_df, aes(x = "protein_complex", y = gene_name)) +
+          geom_text(aes(label = anno, color = protein_complex_id),
+                    size = 2) +
+          scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id), 
+                             guide = NULL) +
+          labs(title = "Protein Complex GO/CORUM Annotation") +
+          coord_fixed(clip = "off") +
+          theme_void() +
+          theme(plot.title = element_text(size = 10))
+        
+        fold_changes_heatmap <- fc_plot + 
+                                protein_complex_anno +
+                                ppic_anno +
+                                patchwork::plot_layout(guides = "collect",
+                                                       ncol = 3, 
+                                                       width = unit(c(1, 2, 1), c("null", "cm","null"))) &
+                                theme(legend.position = 'left')
+        
+      
+        #### Generate a figure legend for the network graph
+    
+        # barplot of the color codes
+        legend <- ggplot(pcid, aes(x = x, y = protein_complex_id)) +
+          geom_tile(aes(fill = protein_complex_id)) +
+          scale_fill_manual(values = pull(pcid, node_color, name = protein_complex_id)) +
+          labs(title = "Protein Complex IDs") +
+          coord_fixed() +
+          theme_void() +
+          theme(legend.position = "none", 
+                axis.text.y = element_text(color = "black", size = 14), 
+                axis.ticks.y = element_line(color = "black", linewidth = 1, linetype = "solid"),
+                axis.ticks.length.y = unit(2,"mm"))
+        
+        #### Generate  network graph
+        set.seed(20240410)
+        g <- graph_from_graphnel(input_module)
+        layout <- layout_with_kk(g, dim = 2)
+        # make gene symbol as labels
+        idx <- match(V(g)$name, names(gene_names_annot))
+        # table(is.na(idx))
+        V(g)$gene_names <-  gene_names_annot[idx]
+        V(g)$node_color <- protein_complexes %>% 
+          pull(node_color, name = gene_id) %>% 
+          alpha(., alpha = 0.5)
+        
+        module_network_graph <- plot(g, 
+                   layout = layout,
+                   vertex.label.dist = 0, 
+                   label.color = "black",
+                   edge.color = "grey50",
+                   vertex.label.cex = 0.5,
+                   vertex.label.color = "black",
+                   vertex.size = 12,
+                   vertex.label = V(g)$gene_names,
+                   vertex.color = V(g)$node_color)
+        
+        figs <- list("fcs" = fold_changes_heatmap, 
+                      "graph_legend" = legend,
+                      "network_graph" = module_network_graph)
+        return(figs)
+    } else {
+      message("protein complex annotations has unresolved duplicates.")
+      return(protein_complex_anno)
+    }
+}
+```
+
+
+
+
+```{r}
+data(interactome,package = "DLBCL") #A graphNEL graph with undirected edges
+data(dataLym, package = "DLBCL")
+data(exprLym, package = "DLBCL") 
+
 pvals <- cbind(t=dataLym$t.pval, s=dataLym$s.pval)
 rownames(pvals) <- dataLym$label
-pval <- aggrPvals(pvals, order=2, plot=FALSE)
+pval <- aggrPvals(pvals, order=2, plot=TRUE)
 
 
 subnet <- subNetwork(dataLym$label, interactome)
 subnet <- rmSelfLoops(subnet)
+subnet <- largestComp(subnet)
 subnet
 
 
@@ -2573,7 +3108,22 @@ logFC <- dataLym$diff
 names(logFC) <- dataLym$label
 
 plotModule(module, scores=scores, diff.expr=logFC)
+  # layout_with_fr()
+    # layout_with_sugiyama(g) 
+                                 # layers = c(1:10))
+    # layout_with_mds(g)
+    # layout_nicely(g,
+    #                         # weights = NA,
+    #                         weights = 1/E(g)$weight,
+    #                         # use.seed = TRUE,
+    #                         # seed = 20240410, 
+    #                         dim = 3)
+    # layout_in_circle(g)
+    # layout_nicely(g)
+  
 ```
+
+
 
 
 ### Enrichment Browser 
@@ -2947,20 +3497,16 @@ ggplot(ap2_expn, aes(x=analysis_factor_group, y=log2_CPM)) +
 # dev.off()
 ```
 
+
 ```{r}
+id_map <- ap2_expn %>% 
+  select(gene_id, input_id) %>% 
+  distinct()
+
 ap2_mat <- expression[ap2_ids$gene_id,rownames(input_d456)]
-rownames(ap2_mat) <- unique(ap2_expn$new_rownames)
+# identical(id_map$gene_id, rownames(ap2_mat)) #TRUE
+rownames(ap2_mat) <- id_map$input_id
 
-# head(ap2_mat)
-# dim(ap2_mat)
-
-# pdf("figures/combat_seq/AP2_heatmap_log2CPM_heatmap.pdf", height = 10, width = 10)
-# pheatmap::pheatmap(ap2_mat,
-#                    annotation_col = select(design_input, analysis_factor_group))
-# dev.off()
-```
-
-```{r}
 ap2_mat_rename <- ap2_mat
 colnames(ap2_mat_rename) <- gsub("Pf_Day0","sporozoites",colnames(ap2_mat)) %>% 
   gsub("^.+_(Day[0-9])(_R.+)","\\1_Pf_LS\\2", .)
@@ -2980,8 +3526,9 @@ sample_anno <- design_input %>%
   set_rownames(.$masigpro_id) %>% 
   as.data.frame()
 
-
-gene_anno <- select(ap2_expn, gene_id=new_rownames, gene_name_or_symbol) %>% 
+gene_anno <- select(ap2_expn, 
+                    gene_id=input_id,
+                    gene_name_or_symbol) %>% 
   distinct() %>% 
   mutate(genome="PF3D7") %>% 
   as.data.frame() %>% 
@@ -2997,6 +3544,7 @@ s_ord <- c(paste0("sporozoites_Rep",1:5),
 
 ```{r fig.height=10, fig.width=10, eval=FALSE}
 conflicted::conflict_prefer("rowVars","matrixStats")
+conflicted::conflicts_prefer(base::intersect)
 
 heat_colors <- colorRamp2(c(-3,-2, -1, 0, 1, 2,3),c("deepskyblue4","deepskyblue2","deepskyblue","white", "red","red2","red4"), space="LAB")
 # heat_colors <- colorRamp2(c(-3,-1,0,1,3),c("deepskyblue3","deepskyblue","white", "red", "red3"), space="LAB")
