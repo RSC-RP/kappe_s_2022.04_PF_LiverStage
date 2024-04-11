@@ -452,6 +452,7 @@ voom_de <- function(expnData, pheno,
                     trend=FALSE,
                     GOI=NULL,
                     eBayesRobust=FALSE,
+                    filter_genes = TRUE,
                     lmMethod="ls") {
   # expnData is a matrix or data frame with the raw counts. Patient IDs as colnames, genes as rownames
   # pheno is a character vector with patient IDs as names, and the status for each in each group(eg pos,neg)
@@ -478,9 +479,12 @@ voom_de <- function(expnData, pheno,
   
   #create the DGE list object
   dge <- DGEList(counts = expnData, group = pheno.factor)
-  keep.dge <- rowSums(cpm(dge) >= 1) >= max(2,(percent*ncol(dge))) 
-  dge <- dge[keep.dge,] #subset for those genes with cpm >= 1 per gene in samples
-  dge <- calcNormFactors(dge, method = "TMMwsp") # TMM normalization
+  if(filter_genes){
+    keep.dge <- rowSums(cpm(dge) >= 1) >= max(2,(percent*ncol(dge))) 
+    dge <- dge[keep.dge,] #subset for those genes with cpm >= 1 per gene in samples
+  }
+  # TMM normalization
+  dge <- calcNormFactors(dge, method = "TMMwsp") 
   
   #Create a design matrix and contrasts
   design <- model.matrix(~0 + pheno.factor,
@@ -785,26 +789,17 @@ All sources of latent biological variation will remain in the data using this ap
 cb <- readRDS("expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS")
 
 input_dge <- pf_dge #pf_dge
+
+dim(cb)
+# quantile(cb) # 0 1,316,352
+# quantile(input_dge$counts)
+
 # cb <- ComBat_seq(input_dge$counts, #use raw counts
 #                  batch = input_dge$samples$batch,
 #                  group = input_dge$samples$analysis_factor_group,
 #                  shrink=FALSE)
 
-dim(cb)
-quantile(cb) # 0 1,316,352
-quantile(input_dge$counts)
 # saveRDS(cb,"expression_data/kappe_s_PfHsMmu_cated_samples_Pf3D7v58_combat-seq_counts.RDS") 
-```
-
-```{r eval=FALSE}
-# Shrink Should not be necessary - see original publication
-cb_shrink <- ComBat_seq(pf_dge$counts, #use raw counts
-                 batch = pf_dge$samples$batch, 
-                 group = pf_dge$samples$analysis_factor_group,
-                 shrink=TRUE)
-
-dim(cb_shrink) #5188   31
-quantile(cb_shrink) #0 1,312,321
 ```
 
 ```{r}
@@ -814,7 +809,7 @@ pf_combat_full_dge <- DGEList(counts=cb,
 pf_combat_full_dge <- edgeR::calcNormFactors(pf_combat_full_dge, method="TMMwsp")
 
 dim(pf_combat_full_dge)
-quantile(pf_combat_full_dge$counts)
+# quantile(pf_combat_full_dge$counts)
 ```
 
 ```{r}
@@ -823,7 +818,7 @@ pf_combat_dge <- DGEList(counts=cb[,pf_samples$sample_id_cat],
 
 pf_combat_dge <- edgeR::calcNormFactors(pf_combat_dge, method="TMMwsp")
 dim(pf_combat_dge)
-quantile(pf_combat_dge$counts)
+# quantile(pf_combat_dge$counts)
 # any(rowSums(cpm(pf_combat_dge)) == 0) # FALSE - OK
 ```
 
@@ -960,6 +955,29 @@ combat_DEGs <- lapply(names(combat_de), function(grp){
 sapply(combat_de, function(x) nrow(x$DEGs))
 sapply(combat_de, function(x) nrow(x$all_genes))
 ```
+
+```{r eval=FALSE}
+# This is for the Time-course analysis/PPI network graph analysis to have p-value vectors for all genes at all time-points
+grps <- levels(pf_combat_dge$samples$analysis_factor_group)[-1]
+ref <- levels(pf_combat_dge$samples$analysis_factor_group)[1]
+
+combat_de_nofilter <- purrr::map(grps, function(grp){
+  comparison <- c(ref, grp)
+  subset <- pf_combat_dge[,pf_combat_dge$samples$analysis_factor_group %in% comparison]
+  subset$samples$analysis_factor_group <- droplevels(subset$samples$analysis_factor_group)
+  
+  pheno <- subset$samples$analysis_factor_group %>% 
+    set_names(subset$samples$sample_id_cat)
+
+  voom_de(expnData=subset$counts,
+          pheno = pheno,
+          filter_genes = FALSE,
+          ref = ref)
+
+})
+names(combat_de_nofilter) <- grps
+# saveRDS(combat_de_nofilter,"results/DEGs/kappe_sHeps_Pf_vs_sporozorite_combat-seq_corrected_DEGs_nogenefilter_list.RDS")
+```   
 
 ### Volcano Plots 
 
