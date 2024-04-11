@@ -912,6 +912,299 @@ plotLLSurface <- function (x, opt = NULL, main = "Log-Likelihood Surface", color
 }
 ```
 
+
+```{r}
+ppi_modules <- function(time_course_res, cluster_name, input_network, msp_fit, DEGs = NULL, percentile=0.1){
+  
+  # combine time-course and DEGs p-values into a single vector
+  if(!is.null(DEGs)){
+      message("combining DE results with time-course results p-values")
+      # join time-course and DE results 
+      pvals <- time_course_res %>% 
+        filter(combined_gene_clusters == cluster_name) %>% 
+        select(gene_id, p.value) %>% 
+        left_join(.,select(DEGs, gene_id, matches("p_value_")),
+                  by = "gene_id") %>% 
+        column_to_rownames("gene_id") %>% 
+        as.matrix()
+      
+      # combine time-course p-values for all genes with all DE results (including non-significant hits)
+      all_pf_pvals <- msp_fit$p.vector %>% 
+        as.data.frame() %>% 
+        rownames_to_column("gene_id") %>% 
+        left_join(.,select(DEGs, gene_id, matches("p_value_")),
+                  by = "gene_id") %>% 
+        column_to_rownames("gene_id") %>% 
+        as.matrix()
+
+      # remove the time-course cluster genes from the "full" `all_pf_pvals` dataset
+      input_pf_vals <- all_pf_pvals[setdiff(rownames(all_pf_pvals), time_course_res$gene_id),]
+      
+      chk1 <- !any(rownames(input_pf_vals) %in% rownames(pvals)) # TRUE
+      chk2 <- !any(rownames(input_pf_vals) %in% time_course_res$gene_id) #TRUE
+      chk3 <- identical(colnames(input_pf_vals), colnames(pvals)) #TRUE
+      # testit::assert("", )
+      if(all(c(chk1,chk2,chk3))){
+         in_pvalues <- rbind(pvals, input_pf_vals)
+      }
+ 
+    } else {
+      message("Using time-course results p-values")
+      # gene ids of all time-course selected sig genes
+      all_sig_genes <- time_course_res %>% 
+        pull(gene_id)
+      
+      # pvalues of time-course cluster
+      pvalues <- time_course_res %>% 
+        filter(combined_gene_clusters == cluster_name) %>%  
+        pull(p.value, name = gene_id) 
+      
+      # need p-values for the non-sig genes too
+      pf_genes_pvals <- msp_fit$p.vector[,1] %>% 
+        set_names(., value = rownames(msp_fit$p.vector))
+    
+      # remove genes from other time-course clusters
+      not_in_profile <- pf_genes_pvals[setdiff(names(pf_genes_pvals), all_sig_genes)]
+      in_pvalues <- c(pvalues, not_in_profile)
+      # remove NA values if present and order 
+      in_pvalues <- in_pvalues[!is.na(in_pvalues)]
+      in_pvalues <- in_pvalues[order(in_pvalues)]
+    }
+  
+
+  # aggregate if its a matrix input
+  if(is.matrix(in_pvalues)){
+      in_pvalues <- aggrPvals(in_pvalues, plot=FALSE)
+      # remove NA values if present and order 
+      in_pvalues <- in_pvalues[!is.na(in_pvalues)]
+      in_pvalues <- in_pvalues[order(in_pvalues)]
+  }
+  # beta-uniform mixture model to a given p-value distribution
+  message("fitting p-values")
+  fb <- fitBumModel(x = in_pvalues, plot=FALSE, starts = 10)
+  
+  # subset the network graph
+  message("subset the network graph")
+  subnet <- subNetwork(nodeList = names(in_pvalues),
+                        network = input_network)
+  subnet <- rmSelfLoops(subnet)
+  subnet <- largestComp(subnet)
+  # A graphNEL graph with undirected edges
+  
+  # Add scores to the subnetworks
+   message(glue("Add scores to the subnetworks using the top {percentile} percentile threshold"))
+  scores <- scoreNodes(network = subnet,
+                       fb = fb, 
+                       fdr = quantile(fb$pvalues, probs = percentile))
+  
+  # identify the enriched subnetwork(s) 
+  message("identify the enriched subnetwork(s)")
+  module <- runFastHeinz(network = subnet, 
+                         scores = scores)
+  
+  res <- list("module" = module,
+              "scores" = scores,
+              "pvalues" = in_pvalues,
+              "model" = fb)
+}
+```
+
+```{r}
+ppi_network_figures <- function(input_module, protein_complex_annots, gene_names_annot, DEGs){
+  
+    # node (gene_id) names 
+    sel_nodes <- nodes(input_module)
+    
+    # subset to genes in the module 
+    protein_complexes <- protein_complex_annots %>% 
+        filter(gene_id %in% sel_nodes) %>% 
+        
+        # count number of genes within protein complexes
+        # ppic == protein-protein interaction complex
+        group_by(protein_complex_id) %>%
+        mutate(number_genes_in_ppic = n()) %>% 
+        ungroup()  %>% 
+        mutate(percent_in_complex = round( number_genes_in_ppic / number_proteins_in_complex * 100, digits = 2)) %>%
+        
+        # remove duplicate gene_ids and select those with protein complex that has > 3 genes
+        group_by(gene_id) %>%
+        mutate(num_gene_annots = n(),
+               keep = case_when(
+                      num_gene_annots == 1 ~ TRUE,
+                      num_gene_annots > 1 & all(number_genes_in_ppic == 1) ~ !duplicated(gene_id),
+                      num_gene_annots > 1 & any(grepl("^[0-9]", protein_complex_id)) ~ number_genes_in_ppic == max(number_genes_in_ppic)
+        )) %>% 
+        ungroup() %>% 
+        arrange(gene_id) %>% 
+        filter(keep) %>% 
+    
+        # check for any remaining duplicate annotations
+        mutate(dups = duplicated(gene_id) | duplicated(gene_id, fromLast = TRUE)) %>% 
+        
+        # retain annots for graph visualization
+        mutate(protein_complex_id = case_when(
+                          protein_complex_id == "unassigned" ~ "other", 
+                          number_genes_in_ppic == 1 ~ "other", 
+                          TRUE ~ protein_complex_id) %>% 
+                      as.factor(.)
+        ) %>% 
+        
+        # generate color codes for the graph figure
+        group_by(protein_complex_id) %>%
+        mutate(node_color = case_when(
+           protein_complex_id == "other" ~ "grey80",
+           TRUE ~ colors_vector[dplyr::cur_group_id()]
+        )) %>%
+        ungroup() %>%
+        
+        # order the data to be identical to nodes in graph
+        mutate(gene_id = factor(gene_id, levels = sel_nodes)) %>% 
+        arrange(gene_id) %>% 
+        
+        select(dups, 
+               number_genes_in_ppic,
+               percent_in_complex,
+               keep,
+               num_gene_annots,
+               everything()) 
+
+    chk1 <- all(!protein_complexes$dups) # TRUE
+    if(!chk1){
+      # a second round of filtering to address ties
+      protein_complexes <- protein_complexes %>% 
+        group_by(gene_id) %>%
+        mutate(keep = ifelse(dups == TRUE & percent_in_complex != max(percent_in_complex), FALSE, TRUE)) %>% 
+        ungroup() %>% 
+        filter(keep) %>% 
+        # check for any remaining duplicate annotations
+        mutate(dups = duplicated(gene_id) | duplicated(gene_id, fromLast = TRUE))
+    }
+    
+    chk2 <- all(!protein_complexes$dups) # TRUE
+    chk3 <- nrow(protein_complexes) == length(sel_nodes) # TRUE
+    chk4 <- all(sel_nodes %in% protein_complexes$gene_id) # TRUE
+    if(all(c(chk2, chk3, chk4))){
+    
+        # combine the DEGs results and protein complex annotations
+        fcs <- DEGs %>% 
+          filter(gene_id %in% sel_nodes) %>% 
+          pivot_longer(cols = matches("log_fc_"), 
+                       names_to = "time_point",
+                       values_to = "log_fc") %>% 
+          select(gene_id, gene_name, time_point, log_fc) %>% 
+          left_join(., protein_complexes, by = "gene_id") %>% 
+          mutate(time_point = gsub(".+(Day[456])_.+","\\1", time_point)) %>%
+          group_by(gene_name) %>%
+          mutate(mean_fc = mean(log_fc)) %>%
+          ungroup() %>%
+          # arrange heatmap/tileplot by protein cluster ID and decreasing fold-change 
+          arrange(protein_complex_id, desc(mean_fc)) %>% 
+          mutate(gene_name = factor(gene_name, levels = rev(unique(gene_name))))
+        
+        # color codes vector for the protein cluster numbers 
+        pcid <- select(protein_complexes, 
+                      node_color, 
+                      protein_complex_id) %>%
+          distinct() %>% 
+          mutate(x = "cluster")
+        
+        ###### Generate heatmap of Fold-changes for genes in the module
+        fc_plot <- ggplot(fcs, aes(x = time_point, y = gene_name, fill = log_fc)) +
+          labs(y = "", x = "", title = "Fold-Changes per LS Timepoint") +
+          geom_tile() + 
+          coord_fixed() +
+          scale_x_discrete(expand = c(0,0)) +
+          scale_fill_viridis_c(option = "A") +
+          theme_classic() +
+          theme(legend.position = "top", 
+                axis.text = element_text(color = "black", size = 8),
+                axis.text.x = element_text(angle = 35, vjust = 1, hjust = 1),
+                plot.title = element_text(size = 10))
+        
+        protein_complex_anno <- ggplot(fcs, aes(x = "protein_complex", y = gene_name)) +
+          geom_text(aes(label = protein_complex_id, color = protein_complex_id),
+                    size = 4) +
+          scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id),
+                             guide = NULL) +
+          labs(title = "ID") +
+          theme_void() +
+          theme(plot.title = element_text(size = 10))
+        
+        anno_df <- fcs %>% 
+          select(gene_name, protein_complex_id, go_processes, corum_complex_clean) %>% 
+          mutate_at(vars(go_processes, corum_complex_clean), 
+                    ~ifelse(protein_complex_id == "other", "", .)) %>% 
+          mutate(anno = paste(go_processes, corum_complex_clean, sep = "; ")) %>% 
+          mutate(anno = gsub("^;|^NA;|NA$", "", anno)) %>% 
+          select(gene_name, protein_complex_id, anno)
+        
+        ppic_anno <- ggplot(anno_df, aes(x = "protein_complex", y = gene_name)) +
+          geom_text(aes(label = anno, color = protein_complex_id),
+                    size = 2) +
+          scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id), 
+                             guide = NULL) +
+          labs(title = "Protein Complex GO/CORUM Annotation") +
+          coord_fixed(clip = "off") +
+          theme_void() +
+          theme(plot.title = element_text(size = 10))
+        
+        fold_changes_heatmap <- fc_plot + 
+                                protein_complex_anno +
+                                ppic_anno +
+                                patchwork::plot_layout(guides = "collect",
+                                                       ncol = 3, 
+                                                       width = unit(c(1, 2, 1), c("null", "cm","null"))) &
+                                theme(legend.position = 'left')
+        
+      
+        #### Generate a figure legend for the network graph
+    
+        # barplot of the color codes
+        legend <- ggplot(pcid, aes(x = x, y = protein_complex_id)) +
+          geom_tile(aes(fill = protein_complex_id)) +
+          scale_fill_manual(values = pull(pcid, node_color, name = protein_complex_id)) +
+          labs(title = "Protein Complex IDs") +
+          coord_fixed() +
+          theme_void() +
+          theme(legend.position = "none", 
+                axis.text.y = element_text(color = "black", size = 14), 
+                axis.ticks.y = element_line(color = "black", linewidth = 1, linetype = "solid"),
+                axis.ticks.length.y = unit(2,"mm"))
+        
+        #### Generate  network graph
+        set.seed(20240410)
+        g <- graph_from_graphnel(input_module)
+        layout <- layout_with_kk(g, dim = 2)
+        # make gene symbol as labels
+        idx <- match(V(g)$name, names(gene_names_annot))
+        # table(is.na(idx))
+        V(g)$gene_names <-  gene_names_annot[idx]
+        V(g)$node_color <- protein_complexes %>% 
+          pull(node_color, name = gene_id) %>% 
+          alpha(., alpha = 0.5)
+        
+        module_network_graph <- plot(g, 
+                   layout = layout,
+                   vertex.label.dist = 0, 
+                   label.color = "black",
+                   edge.color = "grey50",
+                   vertex.label.cex = 0.5,
+                   vertex.label.color = "black",
+                   vertex.size = 12,
+                   vertex.label = V(g)$gene_names,
+                   vertex.color = V(g)$node_color)
+        
+        figs <- list("fcs" = fold_changes_heatmap, 
+                      "graph_legend" = legend,
+                      "network_graph" = module_network_graph)
+        return(figs)
+    } else {
+      message("protein complex annotations has unresolved duplicates.")
+      return(protein_complex_anno)
+    }
+}
+```
+
 # Reference Data
 
 ```{r}
@@ -2752,108 +3045,12 @@ pf_ppi_graph
 # Number of Edges = 23544
 ```
 
-```{r}
-ppi_modules <- function(time_course_res, cluster_name, input_network, msp_fit, DEGs = NULL, percentile=0.1){
-  
-  # combine time-course and DEGs p-values into a single vector
-  if(!is.null(DEGs)){
-      message("combining DE results with time-course results p-values")
-      # join time-course and DE results 
-      pvals <- time_course_res %>% 
-        filter(combined_gene_clusters == cluster_name) %>% 
-        select(gene_id, p.value) %>% 
-        left_join(.,select(DEGs, gene_id, matches("p_value_")),
-                  by = "gene_id") %>% 
-        column_to_rownames("gene_id") %>% 
-        as.matrix()
-      
-      # combine time-course p-values for all genes with all DE results (including non-significant hits)
-      all_pf_pvals <- msp_fit$p.vector %>% 
-        as.data.frame() %>% 
-        rownames_to_column("gene_id") %>% 
-        left_join(.,select(DEGs, gene_id, matches("p_value_")),
-                  by = "gene_id") %>% 
-        column_to_rownames("gene_id") %>% 
-        as.matrix()
-
-      # remove the time-course cluster genes from the "full" `all_pf_pvals` dataset
-      input_pf_vals <- all_pf_pvals[setdiff(rownames(all_pf_pvals), time_course_res$gene_id),]
-      
-      chk1 <- !any(rownames(input_pf_vals) %in% rownames(pvals)) # TRUE
-      chk2 <- !any(rownames(input_pf_vals) %in% time_course_res$gene_id) #TRUE
-      chk3 <- identical(colnames(input_pf_vals), colnames(pvals)) #TRUE
-      # testit::assert("", )
-      if(all(c(chk1,chk2,chk3))){
-         in_pvalues <- rbind(pvals, input_pf_vals)
-      }
- 
-    } else {
-      message("Using time-course results p-values")
-      # gene ids of all time-course selected sig genes
-      all_sig_genes <- time_course_res %>% 
-        pull(gene_id)
-      
-      # pvalues of time-course cluster
-      pvalues <- time_course_res %>% 
-        filter(combined_gene_clusters == cluster_name) %>%  
-        pull(p.value, name = gene_id) 
-      
-      # need p-values for the non-sig genes too
-      pf_genes_pvals <- msp_fit$p.vector[,1] %>% 
-        set_names(., value = rownames(msp_fit$p.vector))
-    
-      # remove genes from other time-course clusters
-      not_in_profile <- pf_genes_pvals[setdiff(names(pf_genes_pvals), all_sig_genes)]
-      in_pvalues <- c(pvalues, not_in_profile)
-      # remove NA values if present and order 
-      in_pvalues <- in_pvalues[!is.na(in_pvalues)]
-      in_pvalues <- in_pvalues[order(in_pvalues)]
-    }
-  
-
-  # aggregate if its a matrix input
-  if(is.matrix(in_pvalues)){
-      in_pvalues <- aggrPvals(in_pvalues, plot=FALSE)
-      # remove NA values if present and order 
-      in_pvalues <- in_pvalues[!is.na(in_pvalues)]
-      in_pvalues <- in_pvalues[order(in_pvalues)]
-  }
-  # beta-uniform mixture model to a given p-value distribution
-  message("fitting p-values")
-  fb <- fitBumModel(x = in_pvalues, plot=FALSE, starts = 10)
-  
-  # subset the network graph
-  message("subset the network graph")
-  subnet <- subNetwork(nodeList = names(in_pvalues),
-                        network = input_network)
-  subnet <- rmSelfLoops(subnet)
-  subnet <- largestComp(subnet)
-  # A graphNEL graph with undirected edges
-  
-  # Add scores to the subnetworks
-   message(glue("Add scores to the subnetworks using the top {percentile} percentile threshold"))
-  scores <- scoreNodes(network = subnet,
-                       fb = fb, 
-                       fdr = quantile(fb$pvalues, probs = percentile))
-  
-  # identify the enriched subnetwork(s) 
-  message("identify the enriched subnetwork(s)")
-  module <- runFastHeinz(network = subnet, 
-                         scores = scores)
-  
-  res <- list("module" = module,
-              "scores" = scores,
-              "pvalues" = in_pvalues,
-              "model" = fb)
-}
-```
 
 This genes was part of the selected PPI subnet/module identified by BioNET in Profile3 
 PF3D7_1351600
 - it is not found in any other time-course clusters (good)
 - it IS found in the DEGs which is likely why it was selected 
 - SO should it be included in the graph??
-
 
 ```{r}
 timecourse_profiles <- unique(time_course$combined_gene_clusters) %>% 
@@ -2866,7 +3063,7 @@ enriched_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
                   msp_fit = fit_d456,
                   input_network = pf_ppi_graph, 
                   DEGs = DEGs,
-                  percentile = 0.05)
+                  percentile = 0.1)
 
 })
 ```
@@ -2874,7 +3071,7 @@ enriched_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
 ```{r fig.height=7, fig.width=7}
 # enriched_ppi_modules$Profile1$module
 # names(enriched_ppi_modules$Profile1)
-# lapply(enriched_ppi_modules, function(x) x[["module"]])
+lapply(enriched_ppi_modules, function(x) x[["module"]])
 
 # checkout model fit
  lapply(names(enriched_ppi_modules), function(x){
@@ -2889,200 +3086,22 @@ enriched_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
 lapply(enriched_ppi_modules, function(x) plot(x[["model"]]))
 ```   
 
+TO DO: make the breaks on the heatmap identical to ALL plots!! 
+- TO CONSIDER: if there are ties after the first pass of filtering protein annots, how to select the "best" annotation to view
+- the one with the most members in the module or the one with GO/CORUM annots if available?
+
 ```{r fig.height=5, fig.width=5}
-ppi_network_figures(input_module = enriched_ppi_modules$Profile1$module, 
+# module_figs <- purrr::map(enriched_ppi_modules, function(x){
+for ( profile in names(enriched_ppi_modules)){
+    print(profile)
+    print(ppi_network_figures(input_module = enriched_ppi_modules[[profile]]$module, 
                     protein_complex_annots = protein_complex_annots,
                     gene_names_annot = gene_names_annot,
-                    DEGs = DEGs)
-```
-
-
-```{r}
-ppi_network_figures <- function(input_module, protein_complex_annots, gene_names_annot, DEGs){
-  
-    # node (gene_id) names 
-    sel_nodes <- nodes(input_module)
-    
-    # subset to genes in the module 
-    protein_complexes <- protein_complex_annots %>% 
-        filter(gene_id %in% sel_nodes) %>% 
-        
-        # count number of genes within protein complexes
-        # ppic == protein-protein interaction complex
-        group_by(protein_complex_id) %>%
-        mutate(number_genes_in_ppic = n()) %>% 
-        ungroup()  %>% 
-        mutate(percent_in_complex = round( number_genes_in_ppic / number_proteins_in_complex * 100, digits = 2)) %>%
-        
-        # remove duplicate gene_ids and select those with protein complex that has > 3 genes
-        group_by(gene_id) %>%
-        mutate(num_gene_annots = n(),
-               keep = case_when(
-                      num_gene_annots == 1 ~ TRUE,
-                      num_gene_annots > 1 & all(number_genes_in_ppic == 1) ~ !duplicated(gene_id),
-                      num_gene_annots > 1 & any(grepl("^[0-9]", protein_complex_id)) ~ number_genes_in_ppic == max(number_genes_in_ppic)
-        )) %>% 
-        ungroup() %>% 
-        arrange(gene_id) %>% 
-        filter(keep) %>% 
-    
-        # check for any remaining duplicate annotations
-        mutate(dups = duplicated(gene_id) | duplicated(gene_id, fromLast = TRUE)) %>% 
-        
-        # retain annots for graph visualization
-        mutate(protein_complex_id = case_when(
-                          protein_complex_id == "unassigned" ~ "other", 
-                          number_genes_in_ppic == 1 ~ "other", 
-                          TRUE ~ protein_complex_id) %>% 
-                      as.factor(.)
-        ) %>% 
-        
-        # generate color codes for the graph figure
-        group_by(protein_complex_id) %>%
-        mutate(node_color = case_when(
-           protein_complex_id == "other" ~ "grey80",
-           TRUE ~ colors_vector[dplyr::cur_group_id()]
-        )) %>%
-        ungroup() %>%
-        
-        # order the data to be identical to nodes in graph
-        mutate(gene_id = factor(gene_id, levels = sel_nodes)) %>% 
-        arrange(gene_id) %>% 
-        
-        select(dups, 
-               number_genes_in_ppic,
-               percent_in_complex,
-               keep,
-               num_gene_annots,
-               everything()) 
-
-    chk1 <- all(!protein_complexes$dups) # TRUE
-    chk2 <- nrow(protein_complexes) == length(sel_nodes) # TRUE
-    chk3 <- all(sel_nodes %in% protein_complexes$gene_id) # TRUE
-    if(all(c(chk1, chk2, chk3))){
-    
-        # combine the DEGs results and protein complex annotations
-        fcs <- DEGs %>% 
-          filter(gene_id %in% sel_nodes) %>% 
-          pivot_longer(cols = matches("log_fc_"), 
-                       names_to = "time_point",
-                       values_to = "log_fc") %>% 
-          select(gene_id, gene_name, time_point, log_fc) %>% 
-          left_join(., protein_complexes, by = "gene_id") %>% 
-          mutate(time_point = gsub(".+(Day[456])_.+","\\1", time_point)) %>%
-          group_by(gene_name) %>%
-          mutate(mean_fc = mean(log_fc)) %>%
-          ungroup() %>%
-          # arrange heatmap/tileplot by protein cluster ID and decreasing fold-change 
-          arrange(protein_complex_id, desc(mean_fc)) %>% 
-          mutate(gene_name = factor(gene_name, levels = rev(unique(gene_name))))
-        
-        # color codes vector for the protein cluster numbers 
-        pcid <- select(protein_complexes, 
-                      node_color, 
-                      protein_complex_id) %>%
-          distinct() %>% 
-          mutate(x = "cluster")
-        
-        ###### Generate heatmap of Fold-changes for genes in the module
-        fc_plot <- ggplot(fcs, aes(x = time_point, y = gene_name, fill = log_fc)) +
-          labs(y = "", x = "", title = "Fold-Changes per LS Timepoint") +
-          geom_tile() + 
-          coord_fixed() +
-          scale_x_discrete(expand = c(0,0)) +
-          scale_fill_viridis_c(option = "A") +
-          theme_classic() +
-          theme(legend.position = "top", 
-                axis.text = element_text(color = "black", size = 8),
-                axis.text.x = element_text(angle = 35, vjust = 1, hjust = 1),
-                plot.title = element_text(size = 10))
-        
-        protein_complex_anno <- ggplot(fcs, aes(x = "protein_complex", y = gene_name)) +
-          geom_text(aes(label = protein_complex_id, color = protein_complex_id),
-                    size = 4) +
-          scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id),
-                             guide = NULL) +
-          labs(title = "ID") +
-          theme_void() +
-          theme(plot.title = element_text(size = 10))
-        
-        anno_df <- fcs %>% 
-          select(gene_name, protein_complex_id, go_processes, corum_complex_clean) %>% 
-          mutate_at(vars(go_processes, corum_complex_clean), 
-                    ~ifelse(protein_complex_id == "other", "", .)) %>% 
-          mutate(anno = paste(go_processes, corum_complex_clean, sep = "; ")) %>% 
-          mutate(anno = gsub("^;|^NA;|NA$", "", anno)) %>% 
-          select(gene_name, protein_complex_id, anno)
-        
-        ppic_anno <- ggplot(anno_df, aes(x = "protein_complex", y = gene_name)) +
-          geom_text(aes(label = anno, color = protein_complex_id),
-                    size = 2) +
-          scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id), 
-                             guide = NULL) +
-          labs(title = "Protein Complex GO/CORUM Annotation") +
-          coord_fixed(clip = "off") +
-          theme_void() +
-          theme(plot.title = element_text(size = 10))
-        
-        fold_changes_heatmap <- fc_plot + 
-                                protein_complex_anno +
-                                ppic_anno +
-                                patchwork::plot_layout(guides = "collect",
-                                                       ncol = 3, 
-                                                       width = unit(c(1, 2, 1), c("null", "cm","null"))) &
-                                theme(legend.position = 'left')
-        
-      
-        #### Generate a figure legend for the network graph
-    
-        # barplot of the color codes
-        legend <- ggplot(pcid, aes(x = x, y = protein_complex_id)) +
-          geom_tile(aes(fill = protein_complex_id)) +
-          scale_fill_manual(values = pull(pcid, node_color, name = protein_complex_id)) +
-          labs(title = "Protein Complex IDs") +
-          coord_fixed() +
-          theme_void() +
-          theme(legend.position = "none", 
-                axis.text.y = element_text(color = "black", size = 14), 
-                axis.ticks.y = element_line(color = "black", linewidth = 1, linetype = "solid"),
-                axis.ticks.length.y = unit(2,"mm"))
-        
-        #### Generate  network graph
-        set.seed(20240410)
-        g <- graph_from_graphnel(input_module)
-        layout <- layout_with_kk(g, dim = 2)
-        # make gene symbol as labels
-        idx <- match(V(g)$name, names(gene_names_annot))
-        # table(is.na(idx))
-        V(g)$gene_names <-  gene_names_annot[idx]
-        V(g)$node_color <- protein_complexes %>% 
-          pull(node_color, name = gene_id) %>% 
-          alpha(., alpha = 0.5)
-        
-        module_network_graph <- plot(g, 
-                   layout = layout,
-                   vertex.label.dist = 0, 
-                   label.color = "black",
-                   edge.color = "grey50",
-                   vertex.label.cex = 0.5,
-                   vertex.label.color = "black",
-                   vertex.size = 12,
-                   vertex.label = V(g)$gene_names,
-                   vertex.color = V(g)$node_color)
-        
-        figs <- list("fcs" = fold_changes_heatmap, 
-                      "graph_legend" = legend,
-                      "network_graph" = module_network_graph)
-        return(figs)
-    } else {
-      message("protein complex annotations has unresolved duplicates.")
-      return(protein_complex_anno)
-    }
+                    DEGs = DEGs))
 }
+
+# })
 ```
-
-
-
 
 ```{r}
 data(interactome,package = "DLBCL") #A graphNEL graph with undirected edges
