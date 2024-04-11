@@ -657,10 +657,8 @@ ggplot(neg_gex, aes(x=analysis_group_id, y=log2_TMMCPM)) +
 
 ```{r}
 widths_per_gene <- readRDS("species_genomes/PfHsMmu_GRCh38_GRCm39_Pf3D7v58_genes_lengths.RDS")
-head(widths_per_gene)
-```
+# head(widths_per_gene)
 
-```{r}
 pf_tx_size <- widths_per_gene[filter(species_genes, genome=="PF3D7") %>% 
                                 pull(gene_id)]
 
@@ -671,49 +669,74 @@ pf_tx_size %>% sum() #17,380,818
 # 23-Mb haploid genome
 ```
 
+https://www.encodeproject.org/data-standards/rna-seq/long-rnas/
+https://knowledge.illumina.com/library-preparation/rna-library-prep/library-preparation-rna-library-prep-reference_material-list/000001243
+
+With --quantMode GeneCounts option STAR will count number reads per gene while mapping.
+A read is counted if it overlaps (1nt or more) one and only one gene. Both ends of the pairedend read are checked for overlaps. The counts coincide with those produced by htseq-count with
+default parameters.
+
 ```{r}
 dge_lib.sizes <-  pf_combat_dge$samples %>% 
   rownames_to_column("sample_id")
 
-day2 <- dge_lib.sizes %>% 
+coverage_df <- dge_lib.sizes %>% 
   # filter(sample_id %in% pf_samples$sample_id_cat) %>% 
-  filter(time_point == "Day2", sample_id != 'L1PfM1_S13') %>% 
+  # filter(time_point == "Day2", sample_id != 'L1PfM1_S13') %>% 
+  filter(analysis_group != "control", 
+         analysis_group != "sporozorite") %>% 
   mutate(read_length = gsub("pb","", read_length) %>% as.numeric(.),
          pf_tx_size =  sum(pf_tx_size)) %>% 
   mutate(infection_status = ifelse(is.na(infection_status),
                                    "GFP-Negative",  "GFP-Positive"),
-         total_bp_sequenced = lib.size * read_length, 
+         total_bp_sequenced = lib.size * read_length * 2, 
          tx_coverage = round(total_bp_sequenced / pf_tx_size, digits = 3), 
          tx_coverage_label = format(tx_coverage, digits = 3),
+         # 95th percentile? quantile(coverage_df$tx_coverage, probs = c(0.95))
+         # just pick a threshold like 30x?
+         tx_coverage_limited = ifelse(tx_coverage > 30, 30, tx_coverage),
          analysis_group_id = gsub("_Pf.", "", analysis_group_id)) %>% 
-    select(sample_id:norm.factors,
-           read_length,
+    select(sample_id,
+           time_point,
+           lib.size,
            pf_tx_size,
-           total_bp_sequenced,
+           read_length,total_bp_sequenced,
            tx_coverage,
+           infection_status,
            everything())
-  
+           # infection_status:tx_coverage_label,
+           # everything())
 
 
-# day2
+coverage_df
+quantile(coverage_df$tx_coverage, probs = c(0.5,0.95, 0.99))
+```
 
-# day2_counts <- pf_combat_dge$counts[,day2$sample_id]
-# subset_day2_counts <- lapply(colnames(day2_counts), function(col){
-#   df <-  data.frame(gene_name = rownames(day2_counts), 
-#                     counts =  day2_counts[,col], 
-#                     sample = col) %>% 
-#     filter(counts > 0)
-# })
-# 
-# subset_day2_counts
-
-ggplot(day2, aes(y = infection_status, x = analysis_group_id)) +
-  geom_tile(aes(fill = tx_coverage), color = "white") +
+```{r fig.height=5, fig.width=10}
+# pdf("figures/combat_seq/transcript_coverage_day2_to_day6_infected_vs_unifected_heatmap.pdf", height = 6, width = 14)
+ggplot(coverage_df, 
+       aes(y = infection_status, x = analysis_group_id)) +
+  geom_tile(aes(fill = tx_coverage), 
+            color = "black") +
+  coord_fixed() +
   geom_text(aes(label = tx_coverage_label)) +
-  scale_fill_gradient(high = "red", low = "dodgerblue")  +
-  labs(title = "Pf Transcriptome Coverage: Day 2 Samples") +
+  scale_fill_gradient(high = "red", low = "white",
+                      limits = c(0,10),
+                      oob = scales::squish)  +
+  labs(title = "Pf Transcriptome Coverage") +
   theme_classic()
+# dev.off()
 
+# pdf("figures/combat_seq/transcript_coverage_day2_infected_vs_unifected_heatmap.pdf", height = 5, width = 7)
+ggplot(filter(coverage_df, time_point == "Day2"),
+       aes(y = infection_status, x = analysis_group_id)) +
+  geom_tile(aes(fill = tx_coverage), color = "black") +
+  coord_fixed() +
+  geom_text(aes(label = tx_coverage_label)) +
+  scale_fill_gradient(high = "red", low = "white", limits = c(0,1)) +
+  labs(title = "Pf Transcriptome Coverage") +
+  theme_classic()
+# dev.off()
 ```
 
 ## PCA 
