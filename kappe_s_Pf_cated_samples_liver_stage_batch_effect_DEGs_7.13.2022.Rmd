@@ -979,6 +979,13 @@ names(combat_de_nofilter) <- grps
 # saveRDS(combat_de_nofilter,"results/DEGs/kappe_sHeps_Pf_vs_sporozorite_combat-seq_corrected_DEGs_nogenefilter_list.RDS")
 ```   
 
+```{r}
+# combat_de_nofilter$Day2_Heps_Pf$all_genes
+sapply(combat_de_nofilter, function(x) dim(x$all_genes))
+lapply(combat_de_nofilter, function(x) head(x$all_genes))
+```
+
+
 ### Volcano Plots 
 
 ```{r}
