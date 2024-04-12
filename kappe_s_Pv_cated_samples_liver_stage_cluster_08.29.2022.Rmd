@@ -30,6 +30,8 @@ library(ggpubr)
 library(patchwork)
 
 getwd()
+conflicted::conflicts_prefer(base::intersect)
+conflicted::conflicts_prefer(base::setdiff)
 ```
 
 # Define Functions 
@@ -728,7 +730,7 @@ pv_TPM <- read.csv("expression_data/kappe_s_PvHsMmu_PVP01_TPM.csv") %>%
 
 dim(pv_TPM) #6861
 # head(pv_TPM)
-table(duplicated(pv_TPM$gene_name))
+# table(duplicated(pv_TPM$gene_name))
 ```
 
 ```{r}
@@ -738,7 +740,6 @@ dim(pf_TPM) #5720   64
 # head(pf_TPM)
 ```
 
-active/taylor_s/people/jsmi26/CP-Bioinformed/kappe_s_2022.04_rnaseq_quant/normalized_counts/kappe_s_PvHsMmu_GRCh38_GRCm39_Pf3D7v58_TPM.csv
 ```{r}
 all_TPM <- read.csv("expression_data/kappe_s_PvHsMmu_GRCh38_GRCm39_P01v58_TPM.csv") %>% 
   rename_all(~gsub("\\.","", .))
@@ -1332,6 +1333,152 @@ create_pv_heatmaps(TMMCPM=pv_expression$TMMCPM,
 # dev.off()
 ```
 
+# PIR Genes 
+
+```{r}
+pir_genes <- read.csv("references/Pvivax_PIR.csv") %>% 
+  janitor::clean_names() %>% 
+  group_by(product_description) %>% 
+  mutate(PIR_products = case_when(
+    grepl("PIR|VIR", product_description) ~ product_description, 
+    TRUE ~ "other")) %>% 
+  ungroup()
+
+# head(pir_genes)
+# dim(pir_genes) #1266   21
+# any(duplicated(pir_genes$gene_id))
+table(pir_genes$PIR_products)
+```
+
+```{r}
+pv_manifest <-  pvivax_manifest %>% 
+  filter(group=="Cont") %>% 
+  mutate(analysis_group_id=paste(time_point,"Heps",paste0("S",1:n()),"Pv", sep="_")) %>% 
+  set_rownames(.$analysis_group_id)
+
+pv_D8 <- pv_manifest %>% 
+  pull(sample_id, name=analysis_group_id)
+
+pv_TPM_D8 <- pv_TPM[,c("gene_name",pv_D8)]  %>% 
+  column_to_rownames("gene_name")
+
+head(pv_TPM_D8)
+```
+
+```{r}
+pir_expn <- log2(pv_TPM_D8[,pv_D8]+1)
+colnames(pir_expn) <- names(pv_D8)
+
+include <- base::intersect(pir_genes$gene_id, rownames(pir_expn))
+pir_expn <- pir_expn[include,]
+pir_expn <- pir_expn[rowSums(pir_expn) > 0, ]
+
+head(pir_expn)
+# dim(pir_expn) #241   3
+# any(duplicated(rownames(pir_expn)))
+```
+
+```{r}
+pir_expn_long <- pir_expn %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene_id") %>% 
+  pivot_longer(cols = -gene_id,
+               names_to = "analysis_group_id",
+               values_to = "log2TPM") %>% 
+  inner_join(., pv_manifest, by="analysis_group_id") %>%
+  left_join(., pir_genes, by=c("gene_id")) %>%
+  select(gene_id:log2TPM, product_description, everything())
+
+pir_expn_long
+# table(pir_expn_long$type)
+```
+
+```{r}
+pir_expn_summary_stats <- pir_expn_long  %>% 
+  group_by(gene_id, group) %>% 
+  summarise(min = min(log2TPM),
+            median = median(log2TPM),
+            mean = mean(log2TPM),
+            max = max(log2TPM),
+            sd = sd(log2TPM)) %>% 
+  rename_at(vars(min:sd), ~paste0(.,"_log2TPM"))
+
+# pir_expn_summary_stats
+
+pir_genes %>% 
+  group_by(product_description) %>% 
+  dplyr::count() %>% 
+  arrange(desc(n))
+
+# check on these without PIR/VIR in the list?
+```
+
+```{r fig.height=10, fig.width=10}
+library(ComplexHeatmap)
+
+colanno_df <- pv_manifest %>% 
+  select(time_point = analysis_group_id) 
+
+mat <- as.matrix(pir_expn[, rownames(colanno_df)]) 
+mat <- mat[rowSums(mat) > 0, ]
+
+colors <-  paste0("turquoise",2:4) %>% 
+  # ggpubr::get_palette("jco",3) %>% 
+  magrittr::set_names(., value = colanno_df$time_point)
+
+colanno <-  HeatmapAnnotation(df = colanno_df,
+                    which = "column",
+                    height = unit(10,"mm"),
+                    col = list("time_point" = colors))
+
+
+rowanno <- pir_genes %>% 
+  filter(gene_id %in% rownames(mat)) %>% 
+  select(gene_id, PIR_products) %>% 
+  column_to_rownames("gene_id") 
+
+gap_index <- rowanno %>%
+  group_by(PIR_products) %>%
+  mutate(n=n()) %>%
+  ungroup() %>%
+  arrange(n) %>%
+  mutate(PIR_products=factor(PIR_products, levels=unique(PIR_products))) %>%
+  select(-n)
+
+rowanno <- rowanno %>%
+  mutate(PIR_products=factor(PIR_products, levels=unique(gap_index$PIR_products))) %>%
+  arrange(PIR_products)
+
+gene_order <- rownames(rowanno)
+n <- length(unique(rowanno$PIR_products))
+rowanno <- rowanno %>% 
+  HeatmapAnnotation(df = . , which = "row",
+                    width = unit(10,"mm"),
+                    col = list("PIR_products"=ggpubr::get_palette(palette = "npg", n) %>%
+                                        set_names(unique(rowanno$PIR_products))))
+
+# pdf("figures/uncorrected/cvgs_pexel/CGVs_timepoints_D456_log2TPM_heatmap.pdf", height = 12, width = 12)
+mat <- mat[gene_order, ] 
+heat_colors <- circlize::colorRamp2(breaks=c(0,1,3,6,9), colors = viridis::turbo(5))
+
+# svglite::svglite("figures/uncorrected/cvgs_pexel/Pvivax_PIR_genes_timepoints_D8_log2TPM_heatmap.svg",fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), height = 15, width = 15)
+png("figures/uncorrected/cvgs_pexel/Pvivax_PIR_genes_timepoints_D8_log2TPM_heatmap.png", height = 15, width = 15, units = "in", res = 100)
+Heatmap(matrix = mat,
+        col = heat_colors,
+        name = "log2 TPM",
+        split = gap_index,
+        row_gap = unit(2, "mm"),
+        top_annotation = colanno,
+        left_annotation = rowanno,
+        column_names_gp = gpar(fontsize=14),
+        show_column_names = TRUE,
+        show_row_names = TRUE,
+        row_title_gp = gpar(fontsize = 14),
+        row_title_rot = 0,
+        row_names_gp = gpar(fontsize = 4)
+        )
+dev.off()
+```
 
 # Compare to P. Falciparum 
 
@@ -1574,14 +1721,18 @@ pv_TPM_D8 %>%
 ```{r}
 pv_exp <- pv_TPM_D8 %>% 
   filter(expression_category=="expressed", !is.na(p_falciparum_ortholog)) %>% 
-  pull(p_falciparum_ortholog)
+  pull(p_falciparum_ortholog) %>% 
+  unique()
 
 pf_exp <- pf_TPM_D6 %>% 
   filter(expression_category=="expressed", !is.na(p_vivax_ortholog)) %>% 
-  pull(gene_id)
+  pull(gene_id) %>% 
+  unique()
 
 ortholog_list <- list(pv_expressed=pv_exp,
                       pf_expressed=pf_exp)
+
+
 
 both <- intersect(pv_exp,pf_exp)
 pf_only <- setdiff(pf_exp,pv_exp)
@@ -1630,9 +1781,12 @@ pv_TPM_D8 %>%
   filter(grepl("PF3D7_0935390", p_falciparum_ortholog))
 ```
 
+### Visualize 
+
 ```{r}
 # install.packages("ggVennDiagram")
 library(ggVennDiagram)
+library(eulerr)
 ```
 
 ```{r}
@@ -1646,10 +1800,35 @@ ggVennDiagram(ortholog_list,
               label_size=6) + 
   scale_color_manual(values=c(viridis::viridis(n = 1, begin=0.4),
                               viridis::viridis(n = 1,begin = 0.8))) +
-  scale_fill_gradient(low="aliceblue", high = "deepskyblue3", name="Number of Orthologs")
+  scale_fill_gradient(low="aliceblue",
+                      high = "deepskyblue3", 
+                      name="Number of Orthologs")
 # dev.off()
 ```
 
+
+```{r}
+fit <- euler(combinations = ortholog_list,
+             shape = "circle")
+# head(fit)
+
+# svg("figures/uncorrected/pvivax_vs_pfalciparum_orthologs_proportional_venn.svg",width = 7, height = 5, pointsize = 14)
+# svglite::svglite("figures/uncorrected/pvivax_vs_pfalciparum_orthologs_proportional_venn.svg", height = 5, width = 7, fix_text_size=FALSE, system_fonts = list(sans = "Open Sans"), pointsize = 20)
+par(mar = c(10,10,10,10))
+plot(fit,
+     fills = list(fill = c("turquoise4","#BBDF27FF"),
+                  alpha = 0.7),
+     quantities = list("type"= "percent",
+                       fontsize = 12, 
+                       fontfamily = "Helvetica",
+                       fontface = "bold",
+                       rot = 30), 
+     labels = FALSE,
+     # labels = list(col = "black", fontsize = 12,
+     #        fontfamily = "Helvetica-Narrow"),
+     legend = list(col = "black", alpha = 0.8, fontsize = 16))
+# dev.off()
+```
 
 ## GO Terms 
 
