@@ -2635,8 +2635,13 @@ https://link.springer.com/protocol/10.1007/978-1-0716-0239-3_23
 ```{r}
 suppressPackageStartupMessages(library(BioNet))
 suppressPackageStartupMessages(library(igraph))
+
+library(graph)
+> library(qpgraph)
+
 library(ggraph)
 library(tidygraph)
+
 # library(CBNplot) 
 # library(RTN)
 # library(EnrichmentBrowser)
@@ -2960,7 +2965,12 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
         # check for any remaining duplicate annotations
         mutate(dups = duplicated(gene_id) | duplicated(gene_id, fromLast = TRUE))
     }
-
+    
+    # define which genes are in protien complexes 
+    protein_complexes <- protein_complexes %>% 
+      mutate(in_ppic = ifelse(protein_complex_id != "other", "yes", "other"))
+    
+    # ensure there are no duplicates and no genes have been filtered out incorrectly
     chk2 <- all(!protein_complexes$dups) # TRUE
     chk3 <- nrow(protein_complexes) == length(sel_nodes) # TRUE
     chk4 <- all(sel_nodes %in% protein_complexes$gene_id) # TRUE
@@ -3027,15 +3037,6 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
           theme_void() +
           theme(plot.title = element_text(size = 10))
         
-        fold_changes_heatmap <- fc_plot + 
-                                protein_complex_anno +
-                                ppic_anno +
-                                patchwork::plot_layout(guides = "collect",
-                                                       ncol = 3, 
-                                                       width = unit(c(1, 2, 1), c("null", "cm","null")))
-                                # theme(legend.position = 'left')
-        
-  
         #### Generate  network graph
         
         set.seed(20240410)
@@ -3053,6 +3054,9 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
          
         V(g)$protein_complex_id <- protein_complexes %>% 
           pull(protein_complex_id, name = gene_id)
+        
+        V(g)$in_ppic <- protein_complexes %>% 
+          pull(in_ppic, name = gene_id)
      
      # plot using ggraph
       graph_tbl <- g %>% 
@@ -3060,32 +3064,40 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
         activate(nodes) %>% 
         mutate(degree  = centrality_degree())
       
+      pt_size <- ifelse(length(sel_nodes) <= 50, 8, 5)
+      
       module_graph <- ggraph(graph_tbl, 
              layout = 'stress',
              weights = weight) +
         geom_edge_link(aes(width = weight),
                        edge_alpha = 0.1) +
         geom_node_point(aes(fill = mean_log_fc,
-                            color = protein_complex_id),
+                            color = protein_complex_id, 
+                            shape = in_ppic),
                         stroke = 2,
                         shape = 21,
-                        size = 5, 
+                        size = pt_size, 
                         alpha = 1) +
         geom_node_text(aes(label = gene_name),
                        repel = TRUE) +
-        # scale_fill_viridis_c(option = "A") +
         scale_fill_gradientn(colours = viridis::plasma(299),
                              limits = c(-10, 10),
                              oob = scales::squish) +
-                     # breaks = circlize::colorRamp2())
         scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id)) +
         theme(legend.position = 'bottom') +
         theme_void()
         
-        figs <- module_graph + fold_changes_heatmap + patchwork::plot_layout(guides = "collect")
-          # list("fcs" = fold_changes_heatmap, 
-          #             "network_graph" = module_graph)
+        figs <- module_graph +
+                fc_plot + 
+                protein_complex_anno +
+                ppic_anno +
+                patchwork::plot_layout(guides = "collect",
+                                       ncol = 4, 
+                                       width = unit(c(1, 2, 1, 1), c("null", "cm","null","null")))
+                                # & theme(legend.position = 'left')
+        
         return(figs)
+        
     } else {
       message("protein complex annotations has unresolved duplicates.")
       return(protein_complexes)
@@ -3109,9 +3121,6 @@ NOTE: only 20 of 124 genes from Profile 5 are represented in the PPI network!
 - so thats why it is so underrepresented. 
 
 ```{r}
-timecourse_profiles <- unique(time_course$combined_gene_clusters) %>% 
-  set_names(., value = .)
-
 enriched_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
   print(profile)
   
@@ -3123,7 +3132,9 @@ enriched_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
               percentile = 0.1)
 
 })
+```
 
+```{r}
 up_down_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
   print(profile)
   if(grepl("1$|2$", profile)){
