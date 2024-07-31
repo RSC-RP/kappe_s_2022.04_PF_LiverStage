@@ -669,12 +669,13 @@ pf_tx_size %>% sum() #17,380,818
 # 23-Mb haploid genome
 ```
 
+
+
 https://www.encodeproject.org/data-standards/rna-seq/long-rnas/
 https://knowledge.illumina.com/library-preparation/rna-library-prep/library-preparation-rna-library-prep-reference_material-list/000001243
 
 With --quantMode GeneCounts option STAR will count number reads per gene while mapping.
-A read is counted if it overlaps (1nt or more) one and only one gene. Both ends of the pairedend read are checked for overlaps. The counts coincide with those produced by htseq-count with
-default parameters.
+A read is counted if it overlaps (1nt or more) one and only one gene. Both ends of the pairedend read are checked for overlaps. The counts coincide with those produced by htseq-count with default parameters.
 
 ```{r}
 dge_lib.sizes <-  pf_combat_dge$samples %>% 

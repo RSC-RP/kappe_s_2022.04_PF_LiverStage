@@ -52,11 +52,11 @@ suppressPackageStartupMessages(library(mclust))
 # Define Functions 
 
 ```{r}
-colors_vector <- c(RColorBrewer::brewer.pal(9, "Set1"), 
+colors_vector <- c(RColorBrewer::brewer.pal(8, "Set1"), 
             "blue1", "darkslategray3", "burlywood3", "#984EA3",
             "seagreen1", "yellow2", "orchid", "darkblue", 
             "lightsalmon2","slateblue1","lightskyblue4",
-            "azure2", "chartreuse1",  "lemonchiffon2",
+            "chartreuse1",  "lemonchiffon2",
             "deeppink", "darkslategray1", "green4", "navajowhite", 
             "brown4", "darkgoldenrod2", "deepskyblue1", "lightpink") %>% 
   # c(., ggpubr::get_palette("jco", 5)) %>% 
@@ -1025,7 +1025,7 @@ design_input <- colData(cb_se) %>%
                 infection_status,
                 analysis_factor_group,
                 Time=time_point) %>% 
-  # remove Day2_Heps_S3_Pf (L3Pf2_S2xL3Pf2Mix_S3) due to very low read coverage
+  # remove Day2_Heps_S3_Pf (L3Pf2_S2xL3Pf2Mix_S3) due to very low read coverage with <500 reads total
   filter(!grepl("Day2_Heps_S3_Pf", analysis_group_id)) %>% 
   group_by(Time) %>% 
   mutate(masigpro_id=paste("Pf",  Time, 
@@ -1339,13 +1339,6 @@ Profile 3 expressed in SPZ upregulated in LS (Cluster 4 & 6),
 Profile 4 Increasing over LS development (Cluster 5 & Cluster 9),
 Profile 5 upregulated in mature LS forms (Cluster 7).
 
-```{r}
-names(sigs_all_d456)
-names(sigs_all_d456$sig.genes)
-# sigs_all_d456$sig.genes$group.coeffs
-# sigs_all_d456$sig.genes$coefficients
-# sigs_all_d456$sig.genes$sig.pvalues
-```
 
 ```{r}
 # identical(names(gene_clusters_d456$cut),sigs_all_d456$summary)
@@ -2638,12 +2631,11 @@ https://link.springer.com/protocol/10.1007/978-1-0716-0239-3_23
 suppressPackageStartupMessages(library(BioNet))
 suppressPackageStartupMessages(library(igraph))
 
-suppressPackageStartupMessages(library(graph))
-suppressPackageStartupMessages(library(qpgraph))
-
-library(ggraph)
 library(tidygraph)
+library(ggraph)
 
+# suppressPackageStartupMessages(library(graph))
+# suppressPackageStartupMessages(library(qpgraph))
 # library(CBNplot) 
 # library(RTN)
 # library(EnrichmentBrowser)
@@ -2673,10 +2665,22 @@ if(!exists("gene_clusts_combined_dfs")){
 # Need the fit object from MaSigPro for p-values for genes not selected in time-course analysis
 fit_d456 <- readRDS("results/time_course/masigpro/masigpro_fit_p.vector_degree2_D456.RDS")
 
-# Need gene_names info
+# Need gene_names info and clean up bad text encoding from original GTF file being read-in (% symbols)
+# make gene_names unique using gene_id where needed
 pf_genes <- as.data.frame(rowData(cb_se)) %>% 
-  mutate(gene_name = gsub("Name=","", gene_name))
-
+  mutate(gene_name = gsub("Name=","", gene_name),
+         description = gsub("description=", "", description)) %>% 
+  mutate_at(vars(description), ~gsub("\\%2C", " ", .)) %>% 
+  # fix ap2 gene names and make gene_names unique
+  left_join(., select(ap2_ids, gene_id, old_id = input_id),
+            by = "gene_id") %>% 
+  group_by(gene_name) %>% 
+  mutate_at(vars(gene_name), ~case_when(
+    any(duplicated(gene_name)) & gene_name == "ApiAP2" & !is.na(old_id) ~ glue("{gene_name} ({old_id})"),
+    any(duplicated(gene_name)) ~ glue("{gene_name} ({gene_id})"),
+    TRUE ~ gene_name)) %>% 
+  ungroup()
+ 
 # collect DE analysis results into a single file 
 combat_de_nofilter <- readRDS("results/DEGs/kappe_sHeps_Pf_vs_sporozorite_combat-seq_corrected_DEGs_nogenefilter_list.RDS")
 DEGs_df <- purrr::map(combat_de_nofilter[grep("Day[456]", names(combat_de_nofilter))], function(res){
@@ -2693,6 +2697,7 @@ DEGs_df <- purrr::map(combat_de_nofilter[grep("Day[456]", names(combat_de_nofilt
                 .f = function(x,y){
     full_join(x, y, by = "gene_id")
   }) %>%
+  # add gene_name and other annotations
   left_join(., pf_genes, by = "gene_id") %>%
   rowwise() %>% 
   mutate(num_upreg = sum(c_across(cols = matches("log_fc_")) > 0),
@@ -2739,13 +2744,17 @@ PPI_clusters <- openxlsx::read.xlsx("resources/PPI/1-s2.0-S221112471930909X-mmc7
   ungroup() %>% 
   mutate_at(vars(corum_complex_clean), ~gsub("^;|;\\s{1,}$", "", .) %>% 
               gsub(", cytoplasmic", "", .) %>% 
-              gsub("\\s?\\(.+\\)\\s?", "", .)) %>% 
+              gsub("\\s?\\(.+\\)\\s?", "", .) %>% 
+              gsub("al subunit", "e", .) %>% 
+              gsub("polymerase", "pol", .) %>% 
+              gsub("CCT micro-complex;  CCT complex", "CCT complex", .)) %>% 
   select(cluster_number, gene_id, symbol, corum_complex_clean)  %>% 
   left_join(., PPI_GO_terms, by = "cluster_number") %>% 
   mutate_at(vars(go_processes,corum_complex_clean), ~ifelse(is.na(.), "", .)) 
 
-# head(PPI_clusters)
+head(PPI_clusters)
 # dim(PPI_clusters) #1785    3
+# table(PPI_clusters$corum_complex_clean)
 ```
 
 ```{r}
@@ -2754,9 +2763,9 @@ PPI <- openxlsx::read.xlsx("resources/PPI/1-s2.0-S221112471930909X-mmc6.xlsx") %
   
   # skip protein nodes that have multiple gene_ids
   # and retain those found in the expression data (filtered to remove lowly expressed genes)
-  filter(!grepl(",", source)) %>% 
-  filter(source %in% pf_genes$gene_id, 
-         target %in% pf_genes$gene_id) 
+  filter(!grepl(",", source)) %>%
+  filter(source %in% pf_genes$gene_id,
+         target %in% pf_genes$gene_id)
 
 head(PPI)
 # dim(PPI) #23544    36
@@ -2776,15 +2785,19 @@ protein_complex_annots <- PPI %>%
   group_by(protein_complex_id) %>% 
   mutate(number_proteins_in_complex = n()) %>% 
   ungroup()  %>% 
+  
   mutate_at(vars(go_processes,corum_complex_clean), ~ifelse(is.na(.), "", .)) %>% 
-  select(gene_id, protein_complex_id, number_proteins_in_complex,
+  mutate(temporal_expression_changes = ifelse(gene_id %in% time_course$gene_id, "yes", "no")) %>% 
+  select(gene_id, 
+         temporal_expression_changes,
+         protein_complex_id, 
+         number_proteins_in_complex,
          everything())
 
 
-# head(protein_complex_annots)
-# dim(protein_complex_annots) #2141    5
+head(protein_complex_annots)
+# dim(protein_complex_annots) #2141    
 ``` 
-
 
 ### BioNet
 
@@ -2792,7 +2805,7 @@ broken link https://software.cwi.nl/software/heinz
 https://academic.oup.com/bioinformatics/article/26/8/1129/207852
 
 ```{r}
-ppi_modules <- function(time_course_res, cluster_name, input_network, msp_fit, DEGs = NULL, percentile=0.1){
+ppi_modules <- function(time_course_res, cluster_name, input_network, msp_fit, DEGs = NULL, fdr_percentile=0.1, fdr = NULL){
   
   # combine time-course and DEGs p-values into a single vector
   if(!is.null(DEGs)){
@@ -2860,12 +2873,6 @@ ppi_modules <- function(time_course_res, cluster_name, input_network, msp_fit, D
   
   # subset the network graph
   message("subset the network graph")
-  # make the initial subnetwork composed only of proteins found in the PPI 
-  # if( any(grepl("matrix",class(pvalues))) ) {
-  #   time_course_genes <-  rownames(pvalues)
-  # }else{
-  #   time_course_genes <- names(pvalues)
-  # }
   subnet <- subNetwork(nodeList = names(in_pvalues),
                         network = input_network)
   subnet <- rmSelfLoops(subnet)
@@ -2874,8 +2881,13 @@ ppi_modules <- function(time_course_res, cluster_name, input_network, msp_fit, D
   print(glue("there are {n_ppi} nodes in the subnetwork."))
 
   # Add scores to the subnetworks
-   message(glue("Add scores to the subnetworks using the top {percentile} percentile threshold"))
-   cutoff <- quantile(fb$pvalues, probs = percentile)
+   if(!is.null(fdr)){
+     cutoff <- fdr
+     message(glue("Add scores to the subnetworks using the {cutoff} fdr threshold"))
+   }else{
+     cutoff <- quantile(fb$pvalues, probs = fdr_percentile) 
+     message(glue("Add scores to the subnetworks using the top {fdr_percentile} percentile threshold"))
+   }
    print(glue("the FDR threshold is {cutoff}"))
    scores <- scoreNodes(network = subnet,
                        fb = fb, 
@@ -2927,6 +2939,7 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
 
     chk1 <- all(!protein_complexes$dups) # TRUE
     if(!chk1){
+      
       message("second round of filtering annotations")
       # a second round of filtering to address ties
       protein_complexes <- protein_complexes %>% 
@@ -2934,9 +2947,9 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
         mutate(keep = ifelse(dups == TRUE & percent_in_complex != max(percent_in_complex), FALSE, TRUE)) %>% 
         ungroup() %>% 
         filter(keep) %>% 
-
         # 2nd check for any remaining duplicate annotations
         mutate(dups = duplicated(gene_id) | duplicated(gene_id, fromLast = TRUE))
+      
     }
     
     # merge in DE results and clean-up annots
@@ -2947,7 +2960,8 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
         ungroup()  %>%
       
         # retain annots for graph visualization
-        mutate(protein_complex_id = case_when(
+        mutate(hillier_protein_complex_id = protein_complex_id,
+               protein_complex_id = case_when(
                           # protein_complex_id == "unassigned" ~ "other", 
                           number_genes_in_ppic == 1 ~ "other", 
                           TRUE ~ protein_complex_id) %>% 
@@ -2956,12 +2970,12 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
         # define which genes are in protien complexes 
         mutate(in_ppic = ifelse(grepl("other|unassigned", protein_complex_id), "no", "yes")) %>% 
     
-        # generate color codes for the graph figure
+        # update color codes for the graph figure
         group_by(protein_complex_id) %>%
         mutate(node_color = case_when(
-           protein_complex_id == "other" ~ "grey80",
-           protein_complex_id == "unassigned" ~ "black",
-           TRUE ~ colors_vector[dplyr::cur_group_id()]
+           protein_complex_id == "other" ~ "black",
+           protein_complex_id == "unassigned" ~ "grey80",
+           TRUE ~ node_color
         )) %>%
         ungroup() %>%
     
@@ -3003,10 +3017,13 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
           mutate(x = "cluster")
         
         ###### Generate heatmap of Fold-changes for genes in the module
-        
+        fc_color <- ifelse(all(fcs$log_fc < 1), "white", "black")
         fc_plot <- ggplot(fcs, aes(x = time_point, y = gene_name, fill = log_fc)) +
           labs(y = "", x = "", title = "Fold-Changes per LS Timepoint") +
           geom_tile() + 
+          geom_text(aes(label = round(log_fc, digits = 1)), 
+                    color = fc_color,
+                    size = 3) +
           # coord_fixed() +
           scale_x_discrete(expand = c(0,0)) +
           scale_fill_gradientn(colours = viridis::plasma(299),
@@ -3016,42 +3033,46 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
           theme_classic() +
           theme(axis.text = element_text(color = "black", size = 10),
                 axis.text.x = element_text(angle = 35, vjust = 1, hjust = 1),
-                plot.title = element_text(size = 10),
-                legend.title.position = "center")
+                plot.title = element_text(size = 10, hjust = 0.5))
         
-        protein_complex_anno <- ggplot(fcs, aes(x = "protein_complex", y = gene_name)) +
-          geom_text(aes(label = protein_complex_id, color = protein_complex_id),
-                    size = 5) +
-          scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id),
+        
+        protein_complex_anno <- ggplot(fcs, aes(x = "protein_complex",
+                                                y = gene_name)) +
+          geom_text(aes(label = protein_complex_id, 
+                        color = protein_complex_id),
+                    size = 4) +
+          scale_color_manual(values = pull(pcid, node_color, 
+                                           name = protein_complex_id),
                              guide = NULL) +
           theme_void() +
-          theme(plot.title = element_text(size = 10),
-                legend.title.position = "center")
+          theme(plot.title = element_text(size = 8, hjust = 0.5))
         
         anno_df <- fcs %>% 
-          select(gene_name, protein_complex_id, go_processes, corum_complex_clean) %>% 
+          select(gene_name, protein_complex_id,
+                 go_processes, corum_complex_clean) %>% 
           mutate_at(vars(go_processes, corum_complex_clean), 
                     ~ifelse(protein_complex_id == "other", "", .)) %>% 
           mutate(anno = paste(go_processes, corum_complex_clean, sep = "; ")) %>% 
           mutate(anno = gsub("^;|^NA;|NA$", "", anno)) %>% 
           select(gene_name, protein_complex_id, anno)
         
-        ppic_anno <- ggplot(anno_df, aes(x = "protein_complex", y = gene_name)) +
-          geom_text(aes(label = anno, color = protein_complex_id),
-                    size = 2) +
-          scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id), 
+        ppic_anno <- ggplot(anno_df, aes(x = "protein_complex",
+                                         y = gene_name)) +
+          geom_text(aes(label = anno,
+                        color = protein_complex_id),
+                    size = 3) +
+          scale_color_manual(values = pull(pcid, node_color, 
+                                           name = protein_complex_id), 
                              guide = NULL) +
           labs(title = "Protein Complex GO/CORUM Annotation") +
           coord_cartesian(clip = "off") +
           # coord_fixed(clip = "off") +
           theme_void() +
-          theme(plot.title = element_text(size = 10),
-                legend.title.position = "center")
+          theme(plot.title = element_text(size = 10, hjust = 0.5))
         
         #### Generate  network graph
-        
         set.seed(20240410)
-        g <- graph_from_graphnel(input_module)
+        g <- igraph::graph_from_graphnel(input_module)
 
         V(g)$gene_name <-  protein_complexes %>% 
           pull(gene_name, name = gene_id) 
@@ -3068,38 +3089,53 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
         
         V(g)$in_ppic <- protein_complexes %>% 
           pull(in_ppic, name = gene_id)
+        
+        V(g)$temporal_expn_changes <- protein_complexes %>% 
+          pull(temporal_expression_changes, name = gene_id)
+        
      
-     # plot using ggraph
+     # plot using tidygraph
       graph_tbl <- g %>% 
         as_tbl_graph() %>% 
-        activate(nodes) %>% 
+        # activate(nodes) %>% 
         mutate(degree  = centrality_degree())
       
-      pt_size <- ifelse(length(sel_nodes) <= 50, 15, 8)
+      pt_size <- ifelse(length(sel_nodes) <= 50, 18, 10)
+      if ( length(unique(protein_complexes$temporal_expression_changes)) == 1 ){
+        pt_legend <- list(size = c(4), alpha = c(1), shape = 21)
+      }else{
+        pt_legend <- list(size = c(2, 5), alpha = c(0.5, 1), shape = 21) 
+      }
       
+        
       module_graph <- ggraph(graph_tbl, 
-             layout = 'stress',
-             weights = weight) +
+             layout = 'stress') +
         geom_edge_arc(aes(width = weight),
                       strength = 0.2,
                       alpha = 0.1) + 
         geom_node_point(aes(fill = mean_log_fc,
                             color = protein_complex_id, 
-                            shape = in_ppic),
-                        stroke = 2,
-                        size = pt_size, 
-                        alpha = 1) +
+                            shape = in_ppic, 
+                            size = temporal_expn_changes,
+                            alpha = temporal_expn_changes),
+                        stroke = 2.5,
+                        position = position_jitter(),
+                        ) +
         geom_node_label(aes(label = gene_name),
                        repel = TRUE) +
         scale_fill_gradientn(colours = viridis::plasma(299),
                              limits = c(-10, 10),
                              oob = scales::squish, 
                              name = "log2 FC") +
+        
         scale_color_manual(values = pull(pcid, node_color, name = protein_complex_id)) +
         scale_shape_manual(values = c("yes"=22, "no"=21), guide = NULL) +
-        guides(color = guide_legend(override.aes = list(size = 2))) +
+        scale_alpha_manual(values = c("yes" = 1, "no" = 0.5), guide = NULL) +
+        scale_size_manual(values = c("yes" = pt_size, "no" = floor(pt_size/2))) +
+       
+        guides(color = guide_legend(override.aes = list(size = 2)),
+               size = guide_legend(override.aes = pt_legend)) + 
         labs(title = title) +
-        theme(legend.position = 'bottom') +
         theme_void()
       
         
@@ -3113,15 +3149,12 @@ ppi_network_figures <- function(input_module, protein_complex_annots, DEGs, titl
                 protein_complex_anno +
                 ppic_anno +
                 patchwork::plot_layout(guides = "collect", 
-                                        design = plot_design)
-        # & theme(legend.position = 'left')
+                                        design = plot_design) & theme(legend.position = 'left', plot.margin = margin(l = 0.25, r = 1.25, unit = "cm"))
     
-        # figs <- list("module_graph" = module_graph,
-        #               "fc_plot" = fc_plot,
-        #               "protein_complex_anno" = protein_complex_anno,
-        #               "ppic_anno" = ppic_anno)
+        res <- list("module_graph" = figs,
+                    "protein_complex_anno" = protein_complexes)
         
-        return(figs)
+        return(res)
         
     } else {
       message("protein complex annotations has unresolved duplicates.")
@@ -3153,7 +3186,7 @@ timecourse_profiles <- time_course %>%
 timecourse_profiles
 ```
 
-```{r}
+```{r fig.height=7, fig.width=7, eval=FALSE}
 # using all DEGs
 enriched_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
   print(profile)
@@ -3165,25 +3198,23 @@ enriched_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
               DEGs = DEGs_df,
               percentile = 0.1)
 })
-```
 
-```{r fig.height=7, fig.width=7}
- # lapply(names(enriched_ppi_modules), function(x){
- #   input <- enriched_ppi_modules[[x]]
- #  #  p <- enriched_ppi_modules[["pvalues"]]
- #  #  mod <- enriched_ppi_modules[["model"]]
- #  #  
- #  plotLLSurface(x = enriched_ppi_modules[[x]]$pvalues, 
- #              opt = enriched_ppi_modules[[x]]$model)
- # })
+
+# checkout model fit
+ lapply(names(enriched_ppi_modules), function(x){
+   input <- enriched_ppi_modules[[x]]
+  #  p <- enriched_ppi_modules[["pvalues"]]
+  #  mod <- enriched_ppi_modules[["model"]]
+  #
+  plotLLSurface(x = enriched_ppi_modules[[x]]$pvalues,
+              opt = enriched_ppi_modules[[x]]$model)
+ })
 
 
 # checkout model fit
 lapply(enriched_ppi_modules, function(x) plot(x[["model"]]))
-```   
 
-
-```{r}
+# determine how many genes/proteins in the subnet are part of the time-course cluster
 sel_modules <- lapply(enriched_ppi_modules, function(x) x[["module"]])
 
 sapply(names(sel_modules), function(x){
@@ -3197,7 +3228,6 @@ sapply(names(sel_modules), function(x){
 # FALSE       26       24       44       24       44
 # TRUE        23       56      101       43        1
 ```
-
 
 
 ```{r}
@@ -3218,7 +3248,8 @@ up_down_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
               msp_fit = fit_d456,
               input_network = pf_ppi_graph, 
               DEGs = DEGs_df,
-              percentile = pct)
+              # fdr = 1e-10,
+              fdr_percentile = pct)
 
 })
 ```
@@ -3226,56 +3257,139 @@ up_down_ppi_modules <- purrr::map(timecourse_profiles, function(profile){
 ```{r}
 # checkout model fit
 lapply(up_down_ppi_modules, function(x) plot(x[["model"]]))
-```   
 
-
-```{r}
-sel_modules1 <- lapply(up_down_ppi_modules, function(x) x[["module"]])
-
-sapply(names(sel_modules1), function(x){
-  p <- time_course %>% 
-    filter(combined_gene_clusters == x) 
-  
-  table(nodes(sel_modules1[[x]]) %in% p$gene_id)
+# checkout the FDR thresholds on the scores
+fdr_thresholds <- sapply(timecourse_profiles, function(x){
+  pct <- ifelse(grepl("3$", x), 0.05, 0.1)
+  pval <- quantile(up_down_ppi_modules[[x]]$pvalues, probs = pct)
+  fdrThreshold(fdr = pval, fb = up_down_ppi_modules[[x]]$model)
 })
 
-#       Profile1 Profile2 Profile3 Profile4 Profile5
-# FALSE       26       24       44       24       44
-# TRUE        23       56      101       43        1
-
-#       Profile1 Profile2 Profile3 Profile4 Profile5
-# FALSE       11        6        6        4       10
-# TRUE        15       23      115       26        5
+fdr_thresholds
+max(fdr_thresholds)
 ```
-
-```{r}
-d <- degree(graph_from_graphnel(up_down_ppi_modules$Profile3$module)) 
-length(d)
-quantile(d)
-d[d>3] %>% length()
-```
-
 
 ```{r fig.height=10, fig.width=15, warning=FALSE}
+# create module graphs 
+all_genes_in_graphs <- sapply(up_down_ppi_modules, function(x) nodes(x$module)) %>% 
+  unlist()
+
+# generate color codes for the protein complexes graph figure
+pc_annots_subset <- protein_complex_annots %>% 
+  filter(gene_id %in% all_genes_in_graphs) %>%
+  arrange(protein_complex_id) %>% 
+  group_by(protein_complex_id) %>% 
+  mutate(node_color = rep(colors_vector, 3)[dplyr::cur_group_id()]) %>% 
+  ungroup() %>% 
+  select(1:3, node_color, everything())
+
+
 module_figs <- purrr::map(names(up_down_ppi_modules) %>% set_names(., value = .), function(x){
       print(x)
   
       profile <- x
       fig <- ppi_network_figures(input_module = up_down_ppi_modules[[profile]]$module, 
+                          protein_complex_annots = pc_annots_subset,
+                          DEGs = DEGs_df, 
+                          title = profile)
+      # 
+      pdf(glue("figures/combat_seq/networks_ppi/time_course_{profile}_sel_module_genes_network_fcs_07.30.2024.pdf"), height = 11, width = 16)
+      print(fig$module_graph)
+      dev.off()
+
+      return(fig)
+})
+
+module_figs$Profile1$module_graph
+# module_figs$Profile2$module_graph
+```
+
+```{r}
+graph_tables <- purrr::map_dfr(names(up_down_ppi_modules) %>% set_names(., value = .), function(x){
+  
+  profile <- x
+  print(profile)
+  
+  scores <- data.frame(scores = up_down_ppi_modules[[profile]]$scores,
+                     gene_id = names(up_down_ppi_modules[[profile]]$scores))
+  
+  pvals <- data.frame(pvalues = up_down_ppi_modules[[profile]]$pvalues, 
+                    gene_id = names(up_down_ppi_modules[[profile]]$pvalues))
+
+  tab <- data.frame(edges = names(up_down_ppi_modules[[profile]]$module@edgeData@data)) %>% 
+    separate(edges, into = c("from","to"), sep="\\|", remove = FALSE)  %>% 
+    pivot_longer(cols = c(from, to),
+                 names_to = "ppi",
+                 values_to = "gene_id") %>% 
+    mutate(time_course_cluster = profile) %>% 
+    left_join(., module_figs[[profile]]$protein_complex_anno %>% 
+                    select(gene_id,
+                           mean_log_fc, 
+                           temporal_expression_changes,
+                           hillier_protein_complex_id,
+                           gene_name, description, 
+                           corum_complex = corum_complex_clean ,
+                           go_processes), 
+              by = "gene_id") %>% 
+    left_join(., scores, by = "gene_id") %>% 
+    left_join(., pvals, by = "gene_id")
+  
+}) %>% 
+  pivot_wider(id_cols = c(time_course_cluster,edges),
+              names_from = ppi,
+              values_from = c(gene_id, mean_log_fc:pvalues), 
+              names_glue = "{ppi}_{.value}")  %>% 
+  rename_at(vars(matches("gene_id")), ~gsub("_gene_id", "", .)) %>% 
+  select(time_course_cluster, edges, from, to, everything()) 
+
+dim(graph_tables)
+head(graph_tables)
+# graph_table %>% View()
+
+# write.csv(graph_tables, "results/time_course/ppi/protein_protein_interaction_network_graphs.csv", row.names = FALSE)
+```
+
+
+```{r}
+graph_tables %>% 
+  filter(time_course_cluster == "Profile5",
+         # from_temporal_expression_changes == "yes"
+         ) %>% 
+  View()
+```
+
+
+```{r fig.height=10, fig.width=15, eval=FALSE}
+# examine different FDR cut-offs
+p1_fdrs <- scanFDR(fb=up_down_ppi_modules$Profile1$model,
+        fdr=c(0.001, fdr_thresholds[,1])) %>% 
+  mutate(pvals = up_down_ppi_modules$Profile1$model$pvalues) %>% 
+  rownames_to_column("gene_id") %>% 
+  filter(gene_id %in% nodes(up_down_ppi_modules$Profile1$module))
+
+# head(p1_fdrs)
+# tail(p1_fdrs)
+# summary(up_down_ppi_modules$Profile1$model)
+# fdrThreshold(fdr = 0.001, fb = up_down_ppi_modules$Profile1$model)
+
+sc <- sapply(up_down_ppi_modules$Profile1$module@nodeData@data, function(x) x$score)
+# hist(sc,breaks = seq(-10, 64, by = 0.5))
+# quantile(sc)
+
+up_down_ppi_modules$Profile1$module
+p1_filt <- largestScoreComp(network = up_down_ppi_modules$Profile1$module,
+                 score = sc, 
+                 level = 0)
+
+# p1_filt
+# plot(p1_filt)
+p1_filt_fig <- ppi_network_figures(input_module = p1_filt, 
                           protein_complex_annots = protein_complex_annots,
                           DEGs = DEGs_df, 
                           title = profile)
-      
-      pdf(glue("figures/combat_seq/networks_ppi/time_course_{profile}_sel_module_genes_network_fcs.pdf"), height = 10, width = 15)
-      print(fig)
-      dev.off()
-      
-      fig
-})
 
-# names(module_figs)
-# module_figs$Profile1
-# module_figs$Profile3
+# p1_filt_fig$module_graph
+# quantile(sapply(p1_filt@nodeData@data, function(x) x$score))
 ```
 
 ```{r}
@@ -5304,6 +5418,7 @@ tc_ortho_plots <- create_motif_enr_plots(enr_df = input,
                        motif_colors = motif_colors)
 ```
 
+
 ```{r fig.height=12, fig.width=10}
 layout_rows <- "
 ABC
@@ -5350,6 +5465,25 @@ tc_ortho_plots$time_ribbon + tc_ortho_plots$motif_enr +
   plot_layout(design = layout_rows, guides = 'collect', heights = NULL, widths = wdts)
 # dev.off()
 ```
+
+```{r}
+input %>% 
+  filter(grepl("1644.1|0502.2",motif)) %>% 
+  filter(!is.na(plot_fill))
+
+
+```
+
+```{r}
+ortho_motif_PWMs$MA0502.2@profileMatrix
+
+ortho_motif_PWMs$MA0502.2
+```
+```{r}
+ortho_motif_PWMs$MA1644.1@profileMatrix
+ortho_motif_PWMs$MA1644.1
+```
+
 
 #### Time Course Profiles 
 
